@@ -1196,7 +1196,7 @@ class DedupApp:
 
     def check_updates(self):
         # Placeholder for update logic
-        messagebox.showinfo("Updates", "You are running the latest version (v1.0).")
+        messagebox.showinfo("Updates", "You are running the latest version (v1.1.0).")
 
     def create_shortcut(self):
         try:
