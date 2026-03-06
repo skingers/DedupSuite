@@ -4,3 +4,5 @@ imagehash
 reportlab
 numpy
 customtkinter
+# Add your new package here, e.g.:
+# requests
