@@ -1,0 +1,49 @@
+name: Build and Release EXE
+
+on:
+  push:
+    tags:
+      - 'v*.*.*' # Trigger workflow on tags like v1.0.0
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11' # Specify a stable Python version
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build executable with PyInstaller
+        run: |
+          python -m PyInstaller --noconsole --onefile --name="DedupSuite" --icon="app.ico" --version-file="version_info.txt" --add-data="app.ico;." --collect-all customtkinter dedup_suite.py
+
+      # Optional: Add a step here for code signing if you have a certificate
+      # - name: Sign the executable
+      #   run: |
+      #     # Your signtool command would go here
+      #     # Note: Requires storing your certificate and password as GitHub secrets
+
+      - name: Create Release and Upload Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          # This will create a release draft. Remove 'draft: true' to publish immediately.
+          draft: false
+          # Automatically generate release notes based on PRs and commits
+          generate_release_notes: true
+          # Optional: If you have a CHANGELOG.md, you can use body_path: CHANGELOG.md
+          files: |
+            dist/DedupSuite.exe
+        env:
+          # The GITHUB_TOKEN is automatically provided by GitHub Actions
+          # and is required to create a release.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

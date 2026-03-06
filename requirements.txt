@@ -1,0 +1,6 @@
+Pillow
+opencv-python-headless
+imagehash
+reportlab
+numpy
+customtkinter
