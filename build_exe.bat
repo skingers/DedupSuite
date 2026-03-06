@@ -6,7 +6,7 @@ echo ==========================================
 
 REM 1. Install Build Dependencies
 echo [INFO] Checking dependencies...
-pip install pyinstaller customtkinter pillow opencv-python-headless imagehash reportlab requests
+pip install pyinstaller customtkinter pillow opencv-python-headless imagehash reportlab
 
 REM 2. Icon Check
 if not exist "app.ico" (
