@@ -16,6 +16,12 @@ import concurrent.futures
 from collections import defaultdict
 from pathlib import Path
 
+try:
+    import customtkinter as ctk
+except ImportError:
+    print("Missing dependency. Run: pip install customtkinter")
+    sys.exit(1)
+
 # --- External Dependencies ---
 try:
     from PIL import Image, ImageTk, ImageDraw
@@ -66,114 +72,70 @@ class ConfigManager:
             with open(self.filename, "w") as f: json.dump(data, f, indent=4)
         except: pass
 
-class ThemeManager:
-    COLORS = {
-        "light": {
-            "bg": "#f5f5f5", "fg": "#212121", "entry_bg": "#ffffff", "entry_fg": "#212121",
-            "btn_bg": "#009688", "btn_fg": "#ffffff", "btn_active": "#00796b",
-            "select_bg": "#00796b", "select_fg": "#ffffff", "txt_bg": "#ffffff", "txt_fg": "#212121"
-        },
-        "dark": {
-            "bg": "#2e3440", "fg": "#d8dee9", "entry_bg": "#3b4252", "entry_fg": "#eceff4",
-            "btn_bg": "#5e81ac", "btn_fg": "#eceff4", "btn_active": "#81a1c1",
-            "select_bg": "#88c0d0", "select_fg": "#2e3440", "txt_bg": "#3b4252", "txt_fg": "#d8dee9"
-        }
-    }
-    def __init__(self, root):
-        self.root = root
-        self.style = ttk.Style()
-        self.current_mode = "light"
-        try: self.style.theme_use('clam')
-        except: pass
-
-    def toggle(self):
-        self.current_mode = "dark" if self.current_mode == "light" else "light"
-        self.apply_theme()
-        return self.current_mode
-
-    def apply_theme(self):
-        c = self.COLORS[self.current_mode]
-        self.root.configure(bg=c["bg"])
-        self.style.configure(".", background=c["bg"], foreground=c["fg"], fieldbackground=c["entry_bg"], troughcolor=c["bg"], selectbackground=c["select_bg"], selectforeground=c["select_fg"])
-        self.style.configure("TButton", background=c["btn_bg"], foreground=c["btn_fg"], borderwidth=0, padding=(10, 5), font=("Segoe UI", 10))
-        self.style.map("TButton", background=[("active", c["btn_active"])])
-        self.style.configure("TEntry", fieldbackground=c["entry_bg"], foreground=c["entry_fg"])
-        self.style.configure("TCombobox", fieldbackground=c["entry_bg"], foreground=c["entry_fg"], arrowcolor=c["fg"])
-        self.style.configure("TLabelframe", background=c["bg"], borderwidth=0)
-        self.style.configure("TLabelframe.Label", background=c["bg"], foreground=c["fg"], font=("Segoe UI", 11, "bold"))
-        self._update_tk_widgets(self.root, c)
-
-    def _update_tk_widgets(self, parent, colors):
-        for widget in parent.winfo_children():
-            if widget.winfo_class() in ["Text", "ScrolledText"]:
-                widget.configure(bg=colors["txt_bg"], fg=colors["txt_fg"], insertbackground=colors["fg"], selectbackground=colors["select_bg"])
-            elif widget.winfo_class() == "Canvas":
-                widget.configure(bg=colors["bg"])
-            elif widget.winfo_class() == "Listbox":
-                widget.configure(bg=colors["entry_bg"], fg=colors["entry_fg"])
-            if widget.winfo_children(): self._update_tk_widgets(widget, colors)
-
 class IconFactory:
     @staticmethod
     def create_icons(color="#ffffff"):
         icons = {}
-        def new_img(): return Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+        def new_img(): return Image.new("RGBA", (20, 20), (0, 0, 0, 0))
+        
+        def make_ctk(img):
+            return ctk.CTkImage(light_image=img, dark_image=img, size=(20, 20))
         
         # Folder (Browse)
         img = new_img(); d = ImageDraw.Draw(img)
         d.polygon([(2, 4), (6, 4), (8, 6), (14, 6), (14, 12), (2, 12)], outline=color, fill=None)
         d.rectangle([3, 7, 13, 11], fill=color)
-        icons['folder'] = ImageTk.PhotoImage(img)
+        icons['folder'] = make_ctk(img)
 
         # Play (Start)
         img = new_img(); d = ImageDraw.Draw(img)
         d.polygon([(5, 3), (5, 13), (13, 8)], fill=color)
-        icons['play'] = ImageTk.PhotoImage(img)
+        icons['play'] = make_ctk(img)
 
         # Pause
         img = new_img(); d = ImageDraw.Draw(img)
         d.rectangle([4, 3, 6, 13], fill=color); d.rectangle([10, 3, 12, 13], fill=color)
-        icons['pause'] = ImageTk.PhotoImage(img)
+        icons['pause'] = make_ctk(img)
 
         # Stop
         img = new_img(); d = ImageDraw.Draw(img)
         d.rectangle([4, 4, 12, 12], fill=color)
-        icons['stop'] = ImageTk.PhotoImage(img)
+        icons['stop'] = make_ctk(img)
         
         # Save
         img = new_img(); d = ImageDraw.Draw(img)
         d.rectangle([3, 3, 13, 13], outline=color); d.rectangle([5, 3, 11, 5], fill=color); d.rectangle([5, 9, 11, 11], fill=color)
-        icons['save'] = ImageTk.PhotoImage(img)
+        icons['save'] = make_ctk(img)
         
         # Trash
         img = new_img(); d = ImageDraw.Draw(img)
         d.rectangle([5, 5, 11, 13], outline=color); d.line([(4, 3), (12, 3)], fill=color); d.line([(7, 2), (9, 2)], fill=color)
-        icons['trash'] = ImageTk.PhotoImage(img)
+        icons['trash'] = make_ctk(img)
         
         # Refresh/Reset
         img = new_img(); d = ImageDraw.Draw(img)
         d.arc([3, 3, 13, 13], 0, 270, fill=color, width=2); d.polygon([(13, 3), (13, 7), (9, 3)], fill=color)
-        icons['refresh'] = ImageTk.PhotoImage(img)
+        icons['refresh'] = make_ctk(img)
         
         # Search
         img = new_img(); d = ImageDraw.Draw(img)
         d.ellipse([3, 3, 10, 10], outline=color, width=2); d.line([(9, 9), (13, 13)], fill=color, width=2)
-        icons['search'] = ImageTk.PhotoImage(img)
+        icons['search'] = make_ctk(img)
         
         # Arrow Right
         img = new_img(); d = ImageDraw.Draw(img)
         d.line([(3, 8), (11, 8)], fill=color, width=2); d.polygon([(11, 5), (11, 11), (14, 8)], fill=color)
-        icons['arrow'] = ImageTk.PhotoImage(img)
+        icons['arrow'] = make_ctk(img)
         
         # Check
         img = new_img(); d = ImageDraw.Draw(img)
         d.line([(3, 8), (6, 11), (13, 4)], fill=color, width=2)
-        icons['check'] = ImageTk.PhotoImage(img)
+        icons['check'] = make_ctk(img)
 
         # Close
         img = new_img(); d = ImageDraw.Draw(img)
         d.line([(4, 4), (12, 12)], fill=color, width=2); d.line([(4, 12), (12, 4)], fill=color, width=2)
-        icons['close'] = ImageTk.PhotoImage(img)
+        icons['close'] = make_ctk(img)
         return icons
 
 # ==========================================
@@ -481,13 +443,19 @@ class FolderMerger:
 # ==========================================
 
 class ReviewDialog:
-    def __init__(self, parent, duplicate_groups, move_to_path=None, precomputed_hashes=None):
-        self.top = tk.Toplevel(parent)
+    def __init__(self, parent, duplicate_groups, move_to_path=None, precomputed_hashes=None, threshold=5):
+        self.top = ctk.CTkToplevel(parent)
         self.top.title("Review Duplicates")
         self._center_window(1100, 650)
+
+        # Ensure the dialog opens on top and is modal
+        self.top.transient(parent)
+        self.top.grab_set()
+
         self.groups = duplicate_groups
         self.move_to_path = move_to_path
         self.hash_cache = precomputed_hashes if precomputed_hashes else {}
+        self.threshold = threshold
         self.undo_stack = []
         self.temp_dir = Path(tempfile.mkdtemp(prefix="dedup_staging_"))
         self.preview_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
@@ -539,42 +507,43 @@ class ReviewDialog:
 
     def _init_ui(self):
         # Top Filter & Status
-        f_top = ttk.LabelFrame(self.top, text="Filter & Status", padding=5)
-        f_top.pack(fill="x", padx=10, pady=5)
+        f_top = ctk.CTkFrame(self.top)
+        f_top.pack(fill="x", padx=20, pady=(20, 10))
         
-        ttk.Label(f_top, text="Filter by Type:").pack(side="left", padx=5)
+        ctk.CTkLabel(f_top, text="Filter by Type:").pack(side="left", padx=10, pady=10)
         self.filter_var = tk.StringVar()
         ext_list = sorted(list(self.extensions))
-        self.cb_filter = ttk.Combobox(f_top, textvariable=self.filter_var, values=ext_list, state="readonly", width=10)
-        self.cb_filter.pack(side="left", padx=5)
-        self.cb_filter.bind("<<ComboboxSelected>>", lambda e: self.apply_filter())
+        self.cb_filter = ctk.CTkComboBox(f_top, variable=self.filter_var, values=ext_list, width=100, command=lambda e: self.apply_filter())
+        self.cb_filter.pack(side="left", padx=5, pady=10)
         
-        ttk.Button(f_top, text="Clear Filter", image=self.icons['close'], compound="left", command=self.clear_filter).pack(side="left", padx=5)
-        ttk.Button(f_top, text="Delete All Shown", image=self.icons['trash'], compound="left", command=self.delete_all_shown).pack(side="left", padx=5)
-        ttk.Button(f_top, text="Move All Shown", image=self.icons['arrow'], compound="left", command=self.move_all_shown).pack(side="left", padx=5)
+        ctk.CTkButton(f_top, text="Clear", image=self.icons['close'], compound="left", fg_color="gray", command=self.clear_filter, width=80).pack(side="left", padx=5, pady=10)
+        ctk.CTkButton(f_top, text="Delete All Shown", image=self.icons['trash'], compound="left", fg_color="#C92C2C", hover_color="#992222", command=self.delete_all_shown).pack(side="left", padx=5, pady=10)
+        ctk.CTkButton(f_top, text="Move All Shown", image=self.icons['arrow'], compound="left", command=self.move_all_shown).pack(side="left", padx=5, pady=10)
         
-        self.lbl_stats = ttk.Label(f_top, text=f"Total Duplicates: {len(self.pairs)}")
-        self.lbl_stats.pack(side="right", padx=10)
+        self.lbl_stats = ctk.CTkLabel(f_top, text=f"Total Duplicates: {len(self.pairs)}")
+        self.lbl_stats.pack(side="right", padx=20, pady=10)
         
         # Images
-        f_img = ttk.Frame(self.top)
-        f_img.pack(fill="both", expand=True, padx=10, pady=5)
+        f_img = ctk.CTkFrame(self.top, fg_color="transparent")
+        f_img.pack(fill="both", expand=True, padx=20, pady=10)
         
         # Left (Original)
-        f_left = ttk.LabelFrame(f_img, text="Original (Keep)", padding=5)
-        f_left.grid(row=0, column=0, sticky="nsew", padx=5)
-        self.lbl_orig = ttk.Label(f_left, text="Loading Preview...")
-        self.lbl_orig.pack(expand=True)
-        self.lbl_orig_path = ttk.Label(f_left, text="", wraplength=450, justify="center", font=("Segoe UI", 9))
-        self.lbl_orig_path.pack(fill="x", pady=5)
+        f_left = ctk.CTkFrame(f_img)
+        f_left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        ctk.CTkLabel(f_left, text="Original (Keep)", font=("Segoe UI", 14, "bold")).pack(pady=5)
+        self.lbl_orig = ctk.CTkLabel(f_left, text="Loading Preview...")
+        self.lbl_orig.pack(expand=True, pady=10)
+        self.lbl_orig_path = ctk.CTkLabel(f_left, text="", wraplength=450, justify="center", font=("Segoe UI", 11))
+        self.lbl_orig_path.pack(fill="x", pady=10, padx=10)
 
         # Right (Duplicate)
-        f_right = ttk.LabelFrame(f_img, text="Duplicate (Delete)", padding=5)
-        f_right.grid(row=0, column=1, sticky="nsew", padx=5)
-        self.lbl_dupe = ttk.Label(f_right, text="Loading Preview...")
-        self.lbl_dupe.pack(expand=True)
-        self.lbl_dupe_path = ttk.Label(f_right, text="", wraplength=450, justify="center", font=("Segoe UI", 9))
-        self.lbl_dupe_path.pack(fill="x", pady=5)
+        f_right = ctk.CTkFrame(f_img)
+        f_right.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        ctk.CTkLabel(f_right, text="Duplicate (Delete)", font=("Segoe UI", 14, "bold"), text_color="#ff6666").pack(pady=5)
+        self.lbl_dupe = ctk.CTkLabel(f_right, text="Loading Preview...")
+        self.lbl_dupe.pack(expand=True, pady=10)
+        self.lbl_dupe_path = ctk.CTkLabel(f_right, text="", wraplength=450, justify="center", font=("Segoe UI", 11))
+        self.lbl_dupe_path.pack(fill="x", pady=10, padx=10)
         
         f_img.columnconfigure(0, weight=1); f_img.columnconfigure(1, weight=1)
         f_img.rowconfigure(0, weight=1)
@@ -585,30 +554,34 @@ class ReviewDialog:
         self._bind_context_menu(self.lbl_dupe_path, False)
         
         # Controls
-        f_ctrl = ttk.Frame(self.top, padding=10); f_ctrl.pack(fill="x", side="bottom")
+        f_ctrl = ctk.CTkFrame(self.top, fg_color="transparent")
+        f_ctrl.pack(fill="x", side="bottom", padx=20, pady=20)
         
         # Left controls
-        f_c_left = ttk.Frame(f_ctrl); f_c_left.pack(side="left")
-        ttk.Button(f_c_left, text="Smart Select", image=self.icons['check'], compound="left", command=self.smart_select).pack(side="left", padx=2)
-        ttk.Button(f_c_left, text="Find Similar", image=self.icons['search'], compound="left", command=self.find_similar).pack(side="left", padx=2)
-        if HAS_REPORTLAB: ttk.Button(f_c_left, text="PDF Report", image=self.icons['save'], compound="left", command=self.export_pdf).pack(side="left", padx=2)
-        ttk.Button(f_c_left, text="CSV Export", image=self.icons['save'], compound="left", command=self.export_csv).pack(side="left", padx=2)
+        f_c_left = ctk.CTkFrame(f_ctrl, fg_color="transparent")
+        f_c_left.pack(side="left")
+        ctk.CTkButton(f_c_left, text="Smart Select", image=self.icons['check'], compound="left", command=self.smart_select, width=120).pack(side="left", padx=5)
+        ctk.CTkButton(f_c_left, text="Find Similar", image=self.icons['search'], compound="left", command=self.find_similar, width=120).pack(side="left", padx=5)
+        if HAS_REPORTLAB: ctk.CTkButton(f_c_left, text="PDF", image=self.icons['save'], compound="left", command=self.export_pdf, width=80).pack(side="left", padx=5)
+        ctk.CTkButton(f_c_left, text="CSV", image=self.icons['save'], compound="left", command=self.export_csv, width=80).pack(side="left", padx=5)
         
         # Center controls (Move)
-        f_c_center = ttk.Frame(f_ctrl); f_c_center.pack(side="left", padx=20)
-        ttk.Label(f_c_center, text="Move to:").pack(side="left")
-        self.cb_targets = ttk.Combobox(f_c_center, values=self.move_targets, width=15)
+        f_c_center = ctk.CTkFrame(f_ctrl, fg_color="transparent")
+        f_c_center.pack(side="left", padx=20)
+        ctk.CTkLabel(f_c_center, text="Move to:").pack(side="left", padx=5)
+        self.cb_targets = ctk.CTkComboBox(f_c_center, values=self.move_targets, width=150)
         self.cb_targets.pack(side="left", padx=5)
-        ttk.Button(f_c_center, text="Move", image=self.icons['arrow'], compound="left", command=self.move_dupe).pack(side="left")
+        ctk.CTkButton(f_c_center, text="Move", image=self.icons['arrow'], compound="left", command=self.move_dupe, width=80).pack(side="left")
         
         # Right controls
-        f_c_right = ttk.Frame(f_ctrl); f_c_right.pack(side="right")
-        ttk.Button(f_c_right, text="Undo", image=self.icons['refresh'], compound="left", command=self.undo_last).pack(side="right", padx=2)
-        ttk.Button(f_c_right, text="Skip >", image=self.icons['arrow'], compound="right", command=self.next_pair).pack(side="right", padx=2)
-        ttk.Button(f_c_right, text="DELETE DUPLICATE", image=self.icons['trash'], compound="left", command=self.delete_dupe).pack(side="right", padx=10)
+        f_c_right = ctk.CTkFrame(f_ctrl, fg_color="transparent")
+        f_c_right.pack(side="right")
+        ctk.CTkButton(f_c_right, text="Undo", image=self.icons['refresh'], compound="left", fg_color="gray", command=self.undo_last, width=80).pack(side="right", padx=5)
+        ctk.CTkButton(f_c_right, text="Skip >", image=self.icons['arrow'], compound="right", command=self.next_pair, width=80).pack(side="right", padx=5)
+        ctk.CTkButton(f_c_right, text="DELETE", image=self.icons['trash'], compound="left", fg_color="#C92C2C", hover_color="#992222", command=self.delete_dupe, width=100).pack(side="right", padx=10)
         
-        self.lbl_prog = ttk.Label(f_ctrl, text="0/0", font=("Segoe UI", 10, "bold"))
-        self.lbl_prog.pack(side="right", padx=15)
+        self.lbl_prog = ctk.CTkLabel(f_ctrl, text="0/0", font=("Segoe UI", 12, "bold"))
+        self.lbl_prog.pack(side="right", padx=20)
         
         # Shortcuts
         self.top.bind("<Delete>", lambda e: self.delete_dupe())
@@ -685,19 +658,19 @@ class ReviewDialog:
 
     def _load_pair(self):
         if self.current_index >= len(self.pairs):
-            self.lbl_orig.config(image='', text="No more duplicates.")
-            self.lbl_dupe.config(image='', text="")
-            self.lbl_orig_path.config(text="")
-            self.lbl_dupe_path.config(text="")
+            self.lbl_orig.configure(image=None, text="No more duplicates.")
+            self.lbl_dupe.configure(image=None, text="")
+            self.lbl_orig_path.configure(text="")
+            self.lbl_dupe_path.configure(text="")
             return
 
         self.orig, self.dupe = self.pairs[self.current_index]
-        self.lbl_prog.config(text=f"Pair {self.current_index+1} of {len(self.pairs)}")
-        self.lbl_stats.config(text=f"Showing {len(self.pairs)} pairs")
+        self.lbl_prog.configure(text=f"Pair {self.current_index+1} of {len(self.pairs)}")
+        self.lbl_stats.configure(text=f"Showing {len(self.pairs)} pairs")
         
         # Update Paths
-        self.lbl_orig_path.config(text=f"{self.orig}\nSize: {self._fmt_size(self.orig)}")
-        self.lbl_dupe_path.config(text=f"{self.dupe}\nSize: {self._fmt_size(self.dupe)}")
+        self.lbl_orig_path.configure(text=f"{self.orig}\nSize: {self._fmt_size(self.orig)}")
+        self.lbl_dupe_path.configure(text=f"{self.dupe}\nSize: {self._fmt_size(self.dupe)}")
         
         self._show_img(self.lbl_orig, self.orig)
         self._show_img(self.lbl_dupe, self.dupe)
@@ -714,9 +687,9 @@ class ReviewDialog:
     def _show_img(self, lbl, path):
         # 1. Check Cache
         if path in self.thumbnail_cache:
-            tk_img = self.thumbnail_cache[path]
-            lbl.config(image=tk_img, text="")
-            lbl.image = tk_img
+            ctk_img = self.thumbnail_cache[path]
+            lbl.configure(image=ctk_img, text="")
+            lbl.image = ctk_img
             return
 
         # Update the latest requested path for this label
@@ -727,7 +700,7 @@ class ReviewDialog:
             self.active_futures[lbl].cancel()
             del self.active_futures[lbl]
 
-        lbl.config(image='', text="Loading...")
+        lbl.configure(image=None, text="Loading...")
         
         def load_task():
             # EARLY EXIT: If UI has moved on to a different image, abort immediately
@@ -753,7 +726,8 @@ class ReviewDialog:
                 if img.mode not in ('RGB', 'RGBA'):
                     img = img.convert('RGB')
                 img.thumbnail((400, 400))
-                return img
+                # Return raw data to prevent cross-thread object issues
+                return (img.tobytes(), img.size, img.mode)
             except Exception as e:
                 print(f"Error loading preview for {path}: {e}")
                 return None
@@ -768,21 +742,26 @@ class ReviewDialog:
             if self.latest_requests.get(lbl) != path: return
 
             try:
-                img = future.result()
-                if img:
-                    tk_img = ImageTk.PhotoImage(img)
+                result = future.result()
+                if result:
+                    raw_data, size, mode = result
+                    # Recreate image in main thread
+                    img = Image.frombytes(mode, size, raw_data)
+
+                    # Create CTkImage. Size is required for display.
+                    ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=size)
                     
                     # Cache the result (limit size to avoid memory issues)
                     if len(self.thumbnail_cache) > 200: self.thumbnail_cache.clear()
-                    self.thumbnail_cache[path] = tk_img
+                    self.thumbnail_cache[path] = ctk_img
                     
-                    lbl.config(image=tk_img, text="")
-                    lbl.image = tk_img
+                    lbl.configure(image=ctk_img, text="")
+                    lbl.image = ctk_img
                 else:
-                    lbl.config(image='', text="[Preview Error]")
+                    lbl.configure(image=None, text="[Preview Error]")
             except Exception as e:
                 print(f"Error displaying preview: {e}")
-                lbl.config(image='', text="[Display Error]")
+                lbl.configure(image=None, text="[Display Error]")
 
         future = self.preview_executor.submit(load_task)
         self.active_futures[lbl] = future
@@ -846,7 +825,7 @@ class ReviewDialog:
 
             similar_files = []
             checked_paths = {self.dupe}
-            similarity_threshold = self.threshold_var.get() if hasattr(self, 'threshold_var') else 5
+            similarity_threshold = self.threshold if self.threshold > 0 else 5
 
             for path, h in self.hash_cache.items():
                 if path in checked_paths: continue
@@ -863,19 +842,24 @@ class ReviewDialog:
             messagebox.showerror("Error", f"Could not find similar files: {e}", parent=self.top)
 
     def _show_similar_results(self, similar_files):
-        win = tk.Toplevel(self.top)
+        win = ctk.CTkToplevel(self.top)
         win.title(f"Files similar to {self.dupe.name}")
         win.geometry("700x400")
+        win.transient(self.top)
+        win.grab_set()
         
         similar_files.sort(key=lambda x: x[1])
         
-        f = ttk.Frame(win, padding=10); f.pack(fill="both", expand=True)
-        ttk.Label(f, text=f"Found {len(similar_files)} similar files:").pack(anchor="w")
+        f = ctk.CTkFrame(win)
+        f.pack(fill="both", expand=True, padx=20, pady=20)
+        ctk.CTkLabel(f, text=f"Found {len(similar_files)} similar files:").pack(anchor="w", pady=(0, 10))
         
-        txt = tk.Text(f, height=15, width=80); txt.pack(fill="both", expand=True, pady=5)
-        for path, distance in similar_files: txt.insert(tk.END, f"Distance: {distance}\t| Path: {path}\n")
-        txt.config(state="disabled")
-        ttk.Button(win, text="Close", command=win.destroy).pack(pady=10)
+        txt = ctk.CTkTextbox(f)
+        txt.pack(fill="both", expand=True, pady=5)
+        for path, distance in similar_files: 
+            txt.insert("end", f"Distance: {distance}\t| Path: {path}\n")
+        txt.configure(state="disabled")
+        ctk.CTkButton(win, text="Close", command=win.destroy).pack(pady=10)
 
     def export_pdf(self):
         f = filedialog.asksaveasfilename(defaultextension=".pdf")
@@ -904,11 +888,11 @@ class ReviewDialog:
     def _show_properties(self, path):
         try:
             stats = path.stat()
-            prop_win = tk.Toplevel(self.top)
+            prop_win = ctk.CTkToplevel(self.top)
             prop_win.title(f"Properties: {path.name}")
             
-            f = ttk.Frame(prop_win, padding=10)
-            f.pack(fill="both", expand=True)
+            f = ctk.CTkFrame(prop_win)
+            f.pack(fill="both", expand=True, padx=20, pady=20)
 
             details = {
                 "File Name:": path.name,
@@ -929,12 +913,14 @@ class ReviewDialog:
             except: details["Dimensions:"] = "N/A"
 
             for i, (key, value) in enumerate(details.items()):
-                ttk.Label(f, text=key, font=("Segoe UI", 9, "bold")).grid(row=i, column=0, sticky="nw", padx=5, pady=2)
-                entry = ttk.Entry(f); entry.insert(0, value); entry.config(state="readonly")
-                entry.grid(row=i, column=1, sticky="ew", padx=5, pady=2)
+                ctk.CTkLabel(f, text=key, font=("Segoe UI", 12, "bold")).grid(row=i, column=0, sticky="nw", padx=10, pady=5)
+                entry = ctk.CTkEntry(f, width=300)
+                entry.insert(0, value)
+                entry.configure(state="readonly")
+                entry.grid(row=i, column=1, sticky="ew", padx=10, pady=5)
             
             f.columnconfigure(1, weight=1)
-            ttk.Button(prop_win, text="Close", command=prop_win.destroy).pack(pady=10)
+            ctk.CTkButton(prop_win, text="Close", command=prop_win.destroy).pack(pady=10)
         except Exception as e: messagebox.showerror("Error", f"Could not get properties for {path.name}:\n{e}", parent=self.top)
 
     def _bind_context_menu(self, widget, is_original):
@@ -969,7 +955,7 @@ class ReviewDialog:
 
 class DedupApp:
     def __init__(self, root):
-        self.root = root
+        self.root = ctk.CTk()
         self.root.title("File Deduplicator Suite")
         self._center_window(1000, 600)
         self.review_dialog = None
@@ -991,26 +977,31 @@ class DedupApp:
         self.pause_event = threading.Event()
         self.pause_event.set()
         self.settings = self.cfg.load()
-        self.theme = ThemeManager(self.root)
-        if self.settings.get("theme") == "dark": self.theme.toggle()
-        else: self.theme.apply_theme()
+        
+        # Theme Setup
+        ctk.set_appearance_mode("Dark")
+        ctk.set_default_color_theme("blue")
+        
         self.icons = IconFactory.create_icons()
         
-        self.nb = ttk.Notebook(root)
+        self.nb = ctk.CTkTabview(self.root)
         self.nb.pack(fill="both", expand=True)
         
-        self.t_audit = ttk.Frame(self.nb); self.nb.add(self.t_audit, text="Audit / Dedup")
-        self.t_merge = ttk.Frame(self.nb); self.nb.add(self.t_merge, text="Merge Folders")
-        self.t_settings = ttk.Frame(self.nb); self.nb.add(self.t_settings, text="Settings")
+        self.t_audit = self.nb.add("Audit / Dedup")
+        self.t_merge = self.nb.add("Merge Folders")
+        self.t_settings = self.nb.add("Settings")
         
-        f_log = ttk.Frame(root)
-        f_log.pack(fill="x", padx=5, pady=2)
-        ttk.Label(f_log, text="Activity Log:").pack(side="left", padx=5)
-        ttk.Button(f_log, text="Clear Log", image=self.icons['trash'], compound="left", command=self.clear_log).pack(side="right")
-        ttk.Button(f_log, text="Save Log", image=self.icons['save'], compound="left", command=self.save_log).pack(side="right", padx=5)
+        f_log = ctk.CTkFrame(self.root, fg_color="transparent")
+        f_log.pack(fill="x", padx=20, pady=(10, 5))
+        ctk.CTkLabel(f_log, text="Activity Log:").pack(side="left", padx=5)
+        ctk.CTkButton(f_log, text="Clear Log", image=self.icons['trash'], compound="left", fg_color="gray", command=self.clear_log, width=100).pack(side="right")
+        ctk.CTkButton(f_log, text="Save Log", image=self.icons['save'], compound="left", fg_color="gray", command=self.save_log, width=100).pack(side="right", padx=10)
         
-        self.log_area = tk.Text(root, height=8); self.log_area.pack(fill="x")
-        self.pbar = ttk.Progressbar(root, mode="determinate"); self.pbar.pack(fill="x")
+        self.log_area = ctk.CTkTextbox(self.root, height=150)
+        self.log_area.pack(fill="x", padx=20, pady=(0, 10))
+        self.pbar = ctk.CTkProgressBar(self.root)
+        self.pbar.pack(fill="x", padx=20, pady=(0, 20))
+        self.pbar.set(0)
         
         self._init_audit_tab()
         self._init_merge_tab()
@@ -1044,78 +1035,107 @@ class DedupApp:
         self.root.after(0, lambda: self._progress_ui(cur, tot, msg))
 
     def _progress_ui(self, cur, tot, msg):
-        if tot > 0: self.pbar['value'] = (cur/tot)*100
+        if tot > 0: self.pbar.set(cur/tot)
         self.root.title(f"Dedup Suite - {msg}")
 
     def _init_audit_tab(self):
-        f = ttk.Frame(self.t_audit, padding=10); f.pack(fill="x")
-        ttk.Label(f, text="Source:").pack(side="left")
+        f = ctk.CTkFrame(self.t_audit)
+        f.pack(fill="x", padx=20, pady=20)
+        
+        ctk.CTkLabel(f, text="Source:").pack(side="left", padx=10, pady=10)
         self.src_var = tk.StringVar(value=self.settings["last_source"])
-        ttk.Entry(f, textvariable=self.src_var).pack(side="left", fill="x", expand=True)
-        ttk.Button(f, text="Browse", image=self.icons['folder'], compound="left", command=lambda: self.src_var.set(filedialog.askdirectory())).pack(side="left")
+        ctk.CTkEntry(f, textvariable=self.src_var).pack(side="left", fill="x", expand=True, padx=10, pady=10)
+        ctk.CTkButton(f, text="Browse", image=self.icons['folder'], compound="left", command=lambda: self.src_var.set(filedialog.askdirectory())).pack(side="left", padx=10, pady=10)
 
-        f2 = ttk.Frame(self.t_audit, padding=10); f2.pack(fill="x")
+        f2 = ctk.CTkFrame(self.t_audit)
+        f2.pack(fill="x", padx=20, pady=0)
+        
         self.mode_var = tk.StringVar(value="Exact")
-        ttk.Combobox(f2, textvariable=self.mode_var, values=["Exact", "Visual/Video"]).pack(side="left")
+        ctk.CTkOptionMenu(f2, variable=self.mode_var, values=["Exact", "Visual/Video"]).pack(side="left", padx=10, pady=10)
         self.review_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(f2, text="Review Mode", variable=self.review_var).pack(side="left")
+        ctk.CTkCheckBox(f2, text="Review Mode", variable=self.review_var).pack(side="left", padx=10, pady=10)
 
-        f_buttons = ttk.Frame(f2); f_buttons.pack(side="right")
-        self.btn_start = ttk.Button(f_buttons, text="Start Scan", image=self.icons['play'], compound="left", command=self.start_audit)
-        self.btn_start.pack(side="left")
-        self.btn_pause = ttk.Button(f_buttons, text="Pause", image=self.icons['pause'], compound="left", command=self.toggle_pause, state="disabled")
+        f_buttons = ctk.CTkFrame(f2, fg_color="transparent")
+        f_buttons.pack(side="right", padx=10, pady=10)
+        
+        self.btn_start = ctk.CTkButton(f_buttons, text="Start Scan", image=self.icons['play'], compound="left", fg_color="#2CC985", hover_color="#229966", command=self.start_audit)
+        self.btn_start.pack(side="left", padx=5)
+        self.btn_pause = ctk.CTkButton(f_buttons, text="Pause", image=self.icons['pause'], compound="left", fg_color="#E5A00D", hover_color="#B37D0A", command=self.toggle_pause, state="disabled")
         self.btn_pause.pack(side="left", padx=5)
-        self.btn_stop = ttk.Button(f_buttons, text="Stop", image=self.icons['stop'], compound="left", command=self.stop_scan, state="disabled")
+        self.btn_stop = ctk.CTkButton(f_buttons, text="Stop", image=self.icons['stop'], compound="left", fg_color="#C92C2C", hover_color="#992222", command=self.stop_scan, state="disabled")
         self.btn_stop.pack(side="left", padx=5)
 
     def _init_merge_tab(self):
-        f = ttk.Frame(self.t_merge, padding=10); f.pack(fill="x")
+        f = ctk.CTkFrame(self.t_merge)
+        f.pack(fill="x", padx=20, pady=20)
+        
         self.m_master = tk.StringVar(value=self.settings["merge_master"])
         self.m_inc = tk.StringVar(value=self.settings["merge_incoming"])
-        ttk.Entry(f, textvariable=self.m_master).pack(fill="x"); ttk.Entry(f, textvariable=self.m_inc).pack(fill="x")
+        
+        ctk.CTkLabel(f, text="Master Folder (Destination):").pack(anchor="w", padx=10, pady=(10,0))
+        ctk.CTkEntry(f, textvariable=self.m_master).pack(fill="x", padx=10, pady=5)
+        
+        ctk.CTkLabel(f, text="Incoming Folder (Source):").pack(anchor="w", padx=10, pady=(10,0))
+        ctk.CTkEntry(f, textvariable=self.m_inc).pack(fill="x", padx=10, pady=5)
+        
         self.m_dry = tk.BooleanVar(value=True)
-        ttk.Checkbutton(f, text="Dry Run", variable=self.m_dry).pack()
-        ttk.Button(f, text="Start Merge", image=self.icons['play'], compound="left", command=self.start_merge).pack()
+        ctk.CTkCheckBox(f, text="Dry Run (Simulate only)", variable=self.m_dry).pack(pady=10)
+        
+        ctk.CTkButton(f, text="Start Merge", image=self.icons['play'], compound="left", fg_color="#2CC985", hover_color="#229966", command=self.start_merge).pack(pady=20)
 
     def _init_settings_tab(self):
-        f = ttk.LabelFrame(self.t_settings, text="Global Settings", padding=10)
-        f.pack(fill="x", padx=10, pady=10)
-
-        # Threshold
-        ttk.Label(f, text="Visual Similarity Threshold (0-20, lower is stricter):").grid(row=0, column=0, sticky="w", pady=2)
-        self.threshold_var = tk.IntVar(value=self.settings.get('threshold', 0))
-        ttk.Spinbox(f, from_=0, to=20, textvariable=self.threshold_var, width=10).grid(row=0, column=1, sticky="w", pady=2)
-
-        # Threads
-        ttk.Label(f, text="Processing Threads:").grid(row=1, column=0, sticky="w", pady=2)
-        self.threads_var = tk.IntVar(value=self.settings.get('threads', 4))
-        ttk.Spinbox(f, from_=1, to=os.cpu_count() or 8, textvariable=self.threads_var, width=10).grid(row=1, column=1, sticky="w", pady=2)
-
-        # Ignore Extensions
-        ttk.Label(f, text="Ignore Extensions (comma-separated, e.g. .txt,.log):").grid(row=2, column=0, sticky="w", pady=2)
-        self.ignore_exts_var = tk.StringVar(value=self.settings.get('ignore_exts', ''))
-        ttk.Entry(f, textvariable=self.ignore_exts_var, width=50).grid(row=2, column=1, sticky="ew", pady=2)
-
-        # Ignore Folders
-        ttk.Label(f, text="Ignore Folders (comma-separated, e.g. .git,cache):").grid(row=3, column=0, sticky="w", pady=2)
-        self.ignore_folders_var = tk.StringVar(value=self.settings.get('ignore_folders', ''))
-        ttk.Entry(f, textvariable=self.ignore_folders_var, width=50).grid(row=3, column=1, sticky="ew", pady=2)
+        # Titled Frame for Settings
+        f_container = ctk.CTkFrame(self.t_settings)
+        f_container.pack(fill="x", padx=20, pady=20)
         
+        ctk.CTkLabel(f_container, text="Global Settings", font=("Segoe UI", 16, "bold")).pack(anchor="w", padx=15, pady=(15, 5))
+        
+        f = ctk.CTkFrame(f_container, fg_color="transparent")
+        f.pack(fill="x", padx=10, pady=10)
+        
+        # Grid Layout: 2 Columns
+        f.columnconfigure(0, weight=1)
         f.columnconfigure(1, weight=1)
 
-        ttk.Button(self.t_settings, text="Toggle Dark/Light Mode", image=self.icons['refresh'], compound="left", command=self.toggle_theme).pack(pady=10)
-        ttk.Button(self.t_settings, text="Save Settings", image=self.icons['save'], compound="left", command=self.save_settings).pack(pady=20)
-        ttk.Button(self.t_settings, text="Reset to Defaults", image=self.icons['refresh'], compound="left", command=self.reset_settings).pack(pady=5)
-        ttk.Button(self.t_settings, text="Check for Updates", image=self.icons['refresh'], compound="left", command=self.check_updates).pack(pady=5)
-        ttk.Button(self.t_settings, text="Create Desktop Shortcut", image=self.icons['save'], compound="left", command=self.create_shortcut).pack(pady=5)
-        ttk.Button(self.t_settings, text="Report Bug", image=self.icons['search'], compound="left", command=self.report_bug).pack(pady=5)
+        # Threshold
+        ctk.CTkLabel(f, text="Visual Similarity Threshold (0-20):").grid(row=0, column=0, sticky="w", padx=10, pady=5)
+        self.threshold_var = tk.IntVar(value=self.settings.get('threshold', 0))
+        ctk.CTkEntry(f, textvariable=self.threshold_var).grid(row=0, column=1, sticky="ew", padx=10, pady=5)
+
+        # Threads
+        ctk.CTkLabel(f, text="Processing Threads:").grid(row=1, column=0, sticky="w", padx=10, pady=5)
+        self.threads_var = tk.IntVar(value=self.settings.get('threads', 4))
+        ctk.CTkEntry(f, textvariable=self.threads_var).grid(row=1, column=1, sticky="ew", padx=10, pady=5)
+
+        # Ignore Extensions
+        ctk.CTkLabel(f, text="Ignore Extensions (e.g. .txt,.log):").grid(row=2, column=0, sticky="w", padx=10, pady=5)
+        self.ignore_exts_var = tk.StringVar(value=self.settings.get('ignore_exts', ''))
+        ctk.CTkEntry(f, textvariable=self.ignore_exts_var).grid(row=2, column=1, sticky="ew", padx=10, pady=5)
+
+        # Ignore Folders
+        ctk.CTkLabel(f, text="Ignore Folders (e.g. .git,cache):").grid(row=3, column=0, sticky="w", padx=10, pady=5)
+        self.ignore_folders_var = tk.StringVar(value=self.settings.get('ignore_folders', ''))
+        ctk.CTkEntry(f, textvariable=self.ignore_folders_var).grid(row=3, column=1, sticky="ew", padx=10, pady=5)
+        
+        # Action Buttons
+        f_actions = ctk.CTkFrame(self.t_settings, fg_color="transparent")
+        f_actions.pack(fill="x", padx=20, pady=10)
+        
+        ctk.CTkButton(f_actions, text="Save Settings", image=self.icons['save'], compound="left", fg_color="gray", command=self.save_settings).pack(fill="x", pady=5)
+        ctk.CTkButton(f_actions, text="Reset to Defaults", image=self.icons['refresh'], compound="left", fg_color="gray", command=self.reset_settings).pack(fill="x", pady=5)
+        
+        f_extras = ctk.CTkFrame(self.t_settings, fg_color="transparent")
+        f_extras.pack(fill="x", padx=20, pady=10)
+        ctk.CTkButton(f_extras, text="Check for Updates", command=self.check_updates).pack(side="left", expand=True, padx=5)
+        ctk.CTkButton(f_extras, text="Create Shortcut", command=self.create_shortcut).pack(side="left", expand=True, padx=5)
+        ctk.CTkButton(f_extras, text="Report Bug", command=self.report_bug).pack(side="left", expand=True, padx=5)
 
     def start_audit(self):
         self.stop_event.clear()
         self.pause_event.set()
-        self.btn_start.config(state="disabled")
-        self.btn_stop.config(state="normal")
-        self.btn_pause.config(state="normal", text="Pause")
+        self.btn_start.configure(state="disabled")
+        self.btn_stop.configure(state="normal")
+        self.btn_pause.configure(state="normal", text="Pause")
         cls = VideoFileAuditor if self.mode_var.get() == "Visual/Video" else FileAuditor
 
         ignore_exts = [e.strip() for e in self.settings.get('ignore_exts', '').split(',') if e.strip()]
@@ -1132,7 +1152,8 @@ class DedupApp:
         threading.Thread(target=run).start()
 
     def _show_review(self, auditor):
-        self.review_dialog = ReviewDialog(self.root, auditor.found_groups, precomputed_hashes=getattr(auditor, 'hash_cache', {}))
+        self.review_dialog = ReviewDialog(self.root, auditor.found_groups, precomputed_hashes=getattr(auditor, 'hash_cache', {}), 
+                                          threshold=self.settings.get('threshold', 5))
 
     def start_merge(self):
         merger = FolderMerger(self.m_master.get(), self.m_inc.get(), log_callback=self.log, progress_callback=self.progress, dry_run=self.m_dry.get())
@@ -1150,25 +1171,20 @@ class DedupApp:
         self.pause_event.set() # Unpause to allow threads to exit
         self.log("Stop signal sent. Finishing current operation...")
 
-    def toggle_theme(self):
-        new_mode = self.theme.toggle()
-        self.settings['theme'] = new_mode
-        self.log(f"Theme changed to {new_mode} mode.")
-
     def toggle_pause(self):
         if self.pause_event.is_set():
             self.pause_event.clear()
-            self.btn_pause.config(text="Resume")
+            self.btn_pause.configure(text="Resume")
             self.log("Scanning paused.")
         else:
             self.pause_event.set()
-            self.btn_pause.config(text="Pause")
+            self.btn_pause.configure(text="Pause")
             self.log("Scanning resumed.")
 
     def reset_scan_buttons(self):
-        self.btn_start.config(state="normal")
-        self.btn_stop.config(state="disabled")
-        self.btn_pause.config(state="disabled", text="Pause")
+        self.btn_start.configure(state="normal")
+        self.btn_stop.configure(state="disabled")
+        self.btn_pause.configure(state="disabled", text="Pause")
 
     def save_settings(self):
         self.settings['threshold'] = self.threshold_var.get()
@@ -1223,6 +1239,5 @@ class DedupApp:
             messagebox.showinfo("Settings", "Settings reset to defaults. Click 'Save Settings' to persist changes.")
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = DedupApp(root)
-    root.mainloop()
+    app = DedupApp(None)
+    app.root.mainloop()
