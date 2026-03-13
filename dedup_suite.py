@@ -954,7 +954,7 @@ class ReviewDialog:
             self._show_properties(path)
 
 class DedupApp:
-    def __init__(self, root):
+    def __init__(self):
         self.root = ctk.CTk()
         self.root.title("File Deduplicator Suite")
         self._center_window(1000, 600)
@@ -1145,10 +1145,18 @@ class DedupApp:
                       review_mode=self.review_var.get(), stop_event=self.stop_event, pause_event=self.pause_event, threshold=self.settings.get('threshold', 0),
                       threads=self.settings.get('threads', 4), ignore_exts=ignore_exts, ignore_folders=ignore_folders)
         def run():
-            auditor.run()
-            if self.review_var.get() and auditor.found_groups:
-                self.root.after(0, self._show_review, auditor)
-            self.root.after(0, self.reset_scan_buttons)
+            try:
+                auditor.run()
+                if self.review_var.get():
+                    if auditor.found_groups:
+                        self.root.after(0, self._show_review, auditor)
+                    else:
+                        self.log("Scan complete. No duplicates found.")
+                        self.root.after(0, lambda: messagebox.showinfo("Scan Complete", "No duplicates were found."))
+            except Exception as e:
+                self.log(f"Error during scan: {e}")
+            finally:
+                self.root.after(0, self.reset_scan_buttons)
         threading.Thread(target=run).start()
 
     def _show_review(self, auditor):
@@ -1239,5 +1247,5 @@ class DedupApp:
             messagebox.showinfo("Settings", "Settings reset to defaults. Click 'Save Settings' to persist changes.")
 
 if __name__ == "__main__":
-    app = DedupApp(None)
+    app = DedupApp()
     app.root.mainloop()
