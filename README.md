@@ -65,11 +65,10 @@ python dedup_suite.py
 
 ### Building an Executable
 
-To create a standalone `.exe` for Windows distribution, use PyInstaller:
+To create a standalone `.exe` for Windows distribution, first install PyInstaller:
 
 ```bash
 pip install pyinstaller
-pyinstaller --noconsole --onefile --name="DedupSuite" --icon="app.ico" --add-data="app.ico;." dedup_suite.py
 ```
 
 *(Ensure you have an `app.ico` file in the directory, or remove the icon arguments).*
