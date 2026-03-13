@@ -19,7 +19,7 @@ git commit -m "Update via Auto-Uploader"
 
 :: 4. Upload to GitLab
 echo [4/4] Uploading to GitLab...
-git push -u origin main
+git push -u origin main --force
 
 echo.
 echo ========================================================
