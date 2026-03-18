@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 Pillow
 opencv-python-headless
 imagehash
@@ -6,3 +7,10 @@ numpy
 customtkinter
 # Add your new package here, e.g.:
 # requests
+=======
+Pillow
+opencv-python-headless
+imagehash
+reportlab
+numpy
+>>>>>>> 9e1d739e7623fd3b925082d1ab44087a6321a5e2
