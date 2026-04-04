@@ -1,5 +1,6 @@
 import os
 import sys
+import sqlite3
 import shutil
 import hashlib
 import time
@@ -44,6 +45,21 @@ except ImportError:
 #               HELPER CLASSES
 # ==========================================
 
+def get_drive_id(path):
+    try:
+        p = Path(path).resolve()
+        if platform.system() == 'Windows':
+            drive = os.path.splitdrive(p)[0]
+            if drive:
+                output = subprocess.check_output(f'vol {drive}', shell=True, text=True, stderr=subprocess.DEVNULL)
+                for line in output.splitlines():
+                    if 'serial number' in line.lower():
+                        return line.split()[-1].strip()
+        return str(os.stat(p.anchor).st_dev)
+    except Exception:
+        fallback_str = str(Path(path).resolve().anchor)
+        return hashlib.sha256(fallback_str.encode()).hexdigest()[:16]
+
 class ConfigManager:
     def __init__(self, filename="settings.json"):
         # Determine if running as a script or frozen exe
@@ -71,6 +87,122 @@ class ConfigManager:
         try:
             with open(self.filename, "w") as f: json.dump(data, f, indent=4)
         except: pass
+
+class DatabaseManager:
+    def __init__(self, db_name="data_mine.db"):
+        if getattr(sys, 'frozen', False):
+            base_path = os.path.dirname(sys.executable)
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+        self.db_path = os.path.join(base_path, db_name)
+        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self._create_tables()
+
+    def _create_tables(self):
+        with self.conn:
+            self.conn.execute('''
+                CREATE TABLE IF NOT EXISTS devices (
+                    device_id TEXT PRIMARY KEY,
+                    device_name TEXT,
+                    last_seen DATETIME
+                )
+            ''')
+            self.conn.execute('''
+                CREATE TABLE IF NOT EXISTS file_index (
+                    sha256_hash TEXT,
+                    phash TEXT,
+                    file_name TEXT,
+                    file_size INTEGER,
+                    modified_time REAL,
+                    full_path TEXT,
+                    is_golden_version INTEGER DEFAULT 0,
+                    device_id TEXT,
+                    FOREIGN KEY(device_id) REFERENCES devices(device_id)
+                )
+            ''')
+
+    def index_file(self, data):
+        with self.conn:
+            self.conn.execute('''
+                INSERT OR REPLACE INTO file_index 
+                (sha256_hash, phash, file_name, file_size, modified_time, full_path, device_id)
+                VALUES (:sha256_hash, :phash, :file_name, :file_size, :modified_time, :full_path, :device_id)
+            ''', data)
+
+    def identify_golden_versions(self):
+        with self.conn:
+            # Reset all flags to 0 before calculating
+            self.conn.execute("UPDATE file_index SET is_golden_version = 0")
+            
+            # Find the row with the maximum modified_time for each sha256_hash group
+            # and set its is_golden_version flag to 1
+            self.conn.execute('''
+                UPDATE file_index
+                SET is_golden_version = 1
+                WHERE rowid IN (
+                    SELECT rowid FROM (
+                        SELECT rowid, MAX(modified_time)
+                        FROM file_index
+                        WHERE sha256_hash IS NOT NULL
+                        GROUP BY sha256_hash
+                    )
+                )
+            ''')
+            
+            cur = self.conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM file_index WHERE is_golden_version = 1")
+            golden_count = cur.fetchone()[0]
+            
+            cur.execute("SELECT COUNT(*) FROM file_index WHERE is_golden_version = 0 AND sha256_hash IS NOT NULL")
+            legacy_count = cur.fetchone()[0]
+            
+            return {"golden": golden_count, "legacy": legacy_count}
+
+    def get_duplicate_groups(self, scan_mode="Exact", threshold=0):
+        groups = []
+        with self.conn:
+            cur = self.conn.cursor()
+            if "Exact" in scan_mode:
+                cur.execute("SELECT sha256_hash FROM file_index WHERE sha256_hash IS NOT NULL GROUP BY sha256_hash HAVING COUNT(rowid) > 1")
+                for (h,) in cur.fetchall():
+                    cur.execute("SELECT full_path FROM file_index WHERE sha256_hash = ?", (h,))
+                    groups.append([Path(row[0]) for row in cur.fetchall()])
+            else:
+                cur.execute("SELECT phash, full_path FROM file_index WHERE phash IS NOT NULL")
+                records = cur.fetchall()
+                
+                fingerprints = []
+                for phash_str, path_str in records:
+                    try:
+                        # Clean up the string representation of a tuple of hashes
+                        clean_str = phash_str.strip('()').replace("'", "").replace('"', "")
+                        hexes = clean_str.split(",")
+                        hashes = tuple(imagehash.hex_to_hash(x.strip()) for x in hexes if x.strip())
+                        if hashes:
+                            fingerprints.append((hashes, Path(path_str)))
+                    except Exception: pass
+                
+                visited = set()
+                for i in range(len(fingerprints)):
+                    p_fp, p_path = fingerprints[i]
+                    if p_path in visited: continue
+                    group = [p_path]
+                    visited.add(p_path)
+                    for j in range(i+1, len(fingerprints)):
+                        c_fp, c_path = fingerprints[j]
+                        if c_path in visited: continue
+                        if len(p_fp) == len(c_fp):
+                            dist = sum(p_fp[k] - c_fp[k] for k in range(len(p_fp)))
+                            if dist <= threshold:
+                                group.append(c_path)
+                                visited.add(c_path)
+                    if len(group) > 1:
+                        groups.append(group)
+        return groups
+
+    def close(self):
+        if self.conn:
+            self.conn.close()
 
 class IconFactory:
     @staticmethod
@@ -145,7 +277,7 @@ class IconFactory:
 class FileAuditor:
     def __init__(self, root_path, move_to=None, delete=False, dry_run=True, threads=4, report_file=None, 
                  log_callback=None, progress_callback=None, stop_event=None, ignore_exts=None, ignore_folders=None, 
-                 threshold=0, review_mode=False, pause_event=None):
+                 threshold=0, review_mode=False, pause_event=None, db_manager=None):
         self.root_path = Path(root_path).resolve()
         self.move_to = Path(move_to).resolve() if move_to else None
         self.delete = delete
@@ -160,7 +292,8 @@ class FileAuditor:
         self.ignore_folders = set(f.lower() for f in ignore_folders) if ignore_folders else set()
         self.threshold = threshold
         self.review_mode = review_mode
-        self.found_groups = []
+        self.db_manager = db_manager
+        self.device_id = get_drive_id(self.root_path)
         self.files_scanned = 0
         self.duplicates_found = 0
         self.bytes_saved = 0
@@ -240,7 +373,22 @@ class FileAuditor:
                     if self.stop_event.is_set(): break
                     fp, s = future_to_file[future]
                     h = future.result()
-                    if h: processed_groups[s][h].append(fp)
+                    if h: 
+                        processed_groups[s][h].append(fp)
+                        if self.db_manager:
+                            try:
+                                mtime = fp.stat().st_mtime
+                            except Exception:
+                                mtime = 0.0
+                            self.db_manager.index_file({
+                                "sha256_hash": h,
+                                "phash": None,
+                                "file_name": fp.name,
+                                "file_size": s,
+                                "modified_time": mtime,
+                                "full_path": str(fp),
+                                "device_id": self.device_id
+                            })
                     completed += 1
                     self.update_progress(completed, len(full_tasks), f"Hashing: {completed}/{len(full_tasks)}")
 
@@ -252,7 +400,6 @@ class FileAuditor:
 
     def handle_duplicates(self, file_list):
         if self.review_mode:
-            self.found_groups.append(file_list)
             return
         # Basic auto-resolve logic (Keep Oldest)
         try: file_list.sort(key=lambda x: x.stat().st_ctime)
@@ -327,6 +474,22 @@ class VideoFileAuditor(FileAuditor):
                         fingerprints.append((res, fp))
                         # Cache first frame hash for UI search
                         self.hash_cache[fp] = res[0]
+                        if self.db_manager:
+                            try:
+                                mtime = fp.stat().st_mtime
+                                size = fp.stat().st_size
+                            except Exception:
+                                mtime = 0.0
+                                size = 0
+                            self.db_manager.index_file({
+                                "sha256_hash": None,
+                                "phash": str(res),
+                                "file_name": fp.name,
+                                "file_size": size,
+                                "modified_time": mtime,
+                                "full_path": str(fp),
+                                "device_id": self.device_id
+                            })
                     completed += 1
                     self.update_progress(completed, len(files), f"Analyzing: {completed}/{len(files)}")
 
@@ -973,6 +1136,7 @@ class DedupApp:
         except: pass
 
         self.cfg = ConfigManager()
+        self.db_manager = DatabaseManager()
         self.stop_event = threading.Event()
         self.pause_event = threading.Event()
         self.pause_event.set()
@@ -1143,13 +1307,18 @@ class DedupApp:
 
         auditor = cls(self.src_var.get(), log_callback=self.log, progress_callback=self.progress,
                       review_mode=self.review_var.get(), stop_event=self.stop_event, pause_event=self.pause_event, threshold=self.settings.get('threshold', 0),
-                      threads=self.settings.get('threads', 4), ignore_exts=ignore_exts, ignore_folders=ignore_folders)
+                      threads=self.settings.get('threads', 4), ignore_exts=ignore_exts, ignore_folders=ignore_folders, db_manager=self.db_manager)
         def run():
             try:
                 auditor.run()
+                
+                stats = self.db_manager.identify_golden_versions()
+                self.log(f"Database Stats - Golden Files: {stats['golden']} | Legacy Duplicates: {stats['legacy']}")
+                
                 if self.review_var.get():
-                    if auditor.found_groups:
-                        self.root.after(0, self._show_review, auditor)
+                    groups = self.db_manager.get_duplicate_groups(scan_mode=self.mode_var.get(), threshold=self.settings.get('threshold', 0))
+                    if groups:
+                        self.root.after(0, self._show_review, groups, getattr(auditor, 'hash_cache', {}))
                     else:
                         self.log("Scan complete. No duplicates found.")
                         self.root.after(0, lambda: messagebox.showinfo("Scan Complete", "No duplicates were found."))
@@ -1159,8 +1328,8 @@ class DedupApp:
                 self.root.after(0, self.reset_scan_buttons)
         threading.Thread(target=run).start()
 
-    def _show_review(self, auditor):
-        self.review_dialog = ReviewDialog(self.root, auditor.found_groups, precomputed_hashes=getattr(auditor, 'hash_cache', {}), 
+    def _show_review(self, groups, hash_cache):
+        self.review_dialog = ReviewDialog(self.root, groups, precomputed_hashes=hash_cache, 
                                           threshold=self.settings.get('threshold', 5))
 
     def start_merge(self):
@@ -1172,6 +1341,7 @@ class DedupApp:
         self.pause_event.set() # Unpause to allow threads to exit
         self.settings.update({"last_source": self.src_var.get(), "merge_master": self.m_master.get(), "merge_incoming": self.m_inc.get()})
         self.cfg.save(self.settings)
+        self.db_manager.close()
         self.root.destroy()
 
     def stop_scan(self):
