@@ -35,8 +35,8 @@ A professional, multi-threaded GUI application for identifying, reviewing, and m
 
 1.  Clone the repository:
     ```bash
-    git clone https://github.com/your-username/dedup-suite.git
-    cd dedup-suite
+    git clone https://gitlab.com/skingers/DedupSuite.git
+    cd DedupSuite
     ```
 2.  Install dependencies:
     ```bash
