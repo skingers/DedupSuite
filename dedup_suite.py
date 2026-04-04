@@ -131,14 +131,20 @@ class DatabaseManager:
 
     def identify_golden_versions(self):
         with self.conn:
+            cur = self.conn.cursor()
+            cur.execute("PRAGMA table_info(file_index)")
+            columns = [info[1] for info in cur.fetchall()]
+            if 'is_golden' not in columns:
+                self.conn.execute("ALTER TABLE file_index ADD COLUMN is_golden INTEGER DEFAULT 0")
+
             # Reset all flags to 0 before calculating
-            self.conn.execute("UPDATE file_index SET is_golden_version = 0")
+            self.conn.execute("UPDATE file_index SET is_golden = 0")
             
             # Find the row with the maximum modified_time for each sha256_hash group
-            # and set its is_golden_version flag to 1
+            # and set its is_golden flag to 1
             self.conn.execute('''
                 UPDATE file_index
-                SET is_golden_version = 1
+                SET is_golden = 1
                 WHERE rowid IN (
                     SELECT rowid FROM (
                         SELECT rowid, MAX(modified_time)
@@ -149,11 +155,10 @@ class DatabaseManager:
                 )
             ''')
             
-            cur = self.conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM file_index WHERE is_golden_version = 1")
+            cur.execute("SELECT COUNT(*) FROM file_index WHERE is_golden = 1")
             golden_count = cur.fetchone()[0]
             
-            cur.execute("SELECT COUNT(*) FROM file_index WHERE is_golden_version = 0 AND sha256_hash IS NOT NULL")
+            cur.execute("SELECT COUNT(*) FROM file_index WHERE is_golden = 0 AND sha256_hash IS NOT NULL")
             legacy_count = cur.fetchone()[0]
             
             return {"golden": golden_count, "legacy": legacy_count}
@@ -633,6 +638,7 @@ class ReviewDialog:
             base_path = Path(__file__).parent
         self.targets_file = base_path / "move_targets.json"
         self.move_targets = self._load_targets()
+        self.target_var = tk.StringVar(value='Select Folder...')
         
         self.all_pairs = []
         self.extensions = set()
@@ -661,10 +667,14 @@ class ReviewDialog:
             except: return []
         return []
 
-    def _save_target(self, target):
-        if target not in self.move_targets:
-            self.move_targets.append(target)
-            self.cb_targets['values'] = self.move_targets
+    def _save_target(self):
+        target = self.target_var.get()
+        if target and target != 'Select Folder...':
+            if target in self.move_targets:
+                self.move_targets.remove(target)
+            self.move_targets.insert(0, target)
+            self.move_targets = self.move_targets[:5]
+            self.cb_targets.configure(values=self.move_targets)
             try: self.targets_file.write_text(json.dumps(self.move_targets))
             except: pass
 
@@ -723,25 +733,36 @@ class ReviewDialog:
         # Left controls
         f_c_left = ctk.CTkFrame(f_ctrl, fg_color="transparent")
         f_c_left.pack(side="left")
-        ctk.CTkButton(f_c_left, text="Smart Select", image=self.icons['check'], compound="left", command=self.smart_select, width=120).pack(side="left", padx=5)
-        ctk.CTkButton(f_c_left, text="Find Similar", image=self.icons['search'], compound="left", command=self.find_similar, width=120).pack(side="left", padx=5)
-        if HAS_REPORTLAB: ctk.CTkButton(f_c_left, text="PDF", image=self.icons['save'], compound="left", command=self.export_pdf, width=80).pack(side="left", padx=5)
-        ctk.CTkButton(f_c_left, text="CSV", image=self.icons['save'], compound="left", command=self.export_csv, width=80).pack(side="left", padx=5)
+        ctk.CTkButton(f_c_left, text="Smart Select", image=self.icons['check'], compound="left", command=self.smart_select, width=120).pack(side="left", padx=5, anchor="center")
+        ctk.CTkButton(f_c_left, text="Find Similar", image=self.icons['search'], compound="left", command=self.find_similar, width=120).pack(side="left", padx=5, anchor="center")
+        if HAS_REPORTLAB: ctk.CTkButton(f_c_left, text="PDF", image=self.icons['save'], compound="left", command=self.export_pdf, width=80).pack(side="left", padx=5, anchor="center")
+        ctk.CTkButton(f_c_left, text="CSV", image=self.icons['save'], compound="left", command=self.export_csv, width=80).pack(side="left", padx=5, anchor="center")
         
         # Center controls (Move)
         f_c_center = ctk.CTkFrame(f_ctrl, fg_color="transparent")
         f_c_center.pack(side="left", padx=20)
-        ctk.CTkLabel(f_c_center, text="Move to:").pack(side="left", padx=5)
-        self.cb_targets = ctk.CTkComboBox(f_c_center, values=self.move_targets, width=150)
-        self.cb_targets.pack(side="left", padx=5)
-        ctk.CTkButton(f_c_center, text="Move", image=self.icons['arrow'], compound="left", command=self.move_dupe, width=80).pack(side="left")
+        
+        target_frame = ctk.CTkFrame(f_c_center, fg_color="transparent")
+        target_frame.pack(side="left", padx=10, pady=0, anchor="center")
+        ctk.CTkLabel(target_frame, text="Target Archive Folder", font=("Segoe UI", 10)).grid(row=0, column=0, sticky="w")
+        self.cb_targets = ctk.CTkComboBox(target_frame, variable=self.target_var, values=self.move_targets, width=150, state="readonly")
+        self.cb_targets.grid(row=1, column=0, sticky="ew")
+        
+        def browse_target():
+            d = filedialog.askdirectory()
+            if d: 
+                self.target_var.set(d)
+                self._save_target()
+            
+        ctk.CTkButton(f_c_center, text="Browse", image=self.icons['folder'], compound="left", command=browse_target, width=80).pack(side="left", padx=5, anchor="center")
+        ctk.CTkButton(f_c_center, text="Move", image=self.icons['arrow'], compound="left", command=self.move_dupe, width=80).pack(side="left", anchor="center")
         
         # Right controls
         f_c_right = ctk.CTkFrame(f_ctrl, fg_color="transparent")
         f_c_right.pack(side="right")
-        ctk.CTkButton(f_c_right, text="Undo", image=self.icons['refresh'], compound="left", fg_color="gray", command=self.undo_last, width=80).pack(side="right", padx=5)
-        ctk.CTkButton(f_c_right, text="Skip >", image=self.icons['arrow'], compound="right", command=self.next_pair, width=80).pack(side="right", padx=5)
-        ctk.CTkButton(f_c_right, text="DELETE", image=self.icons['trash'], compound="left", fg_color="#C92C2C", hover_color="#992222", command=self.delete_dupe, width=100).pack(side="right", padx=10)
+        ctk.CTkButton(f_c_right, text="Undo", image=self.icons['refresh'], compound="left", fg_color="gray", command=self.undo_last, width=80).pack(side="right", padx=5, anchor="center")
+        ctk.CTkButton(f_c_right, text="Skip >", image=self.icons['arrow'], compound="right", command=self.next_pair, width=80).pack(side="right", padx=5, anchor="center")
+        ctk.CTkButton(f_c_right, text="DELETE", image=self.icons['trash'], compound="left", fg_color="#C92C2C", hover_color="#992222", command=self.delete_dupe, width=100).pack(side="right", padx=10, anchor="center")
         
         self.lbl_prog = ctk.CTkLabel(f_ctrl, text="0/0", font=("Segoe UI", 12, "bold"))
         self.lbl_prog.pack(side="right", padx=20)
@@ -791,15 +812,15 @@ class ReviewDialog:
     def move_all_shown(self):
         if not self.pairs: return
         
-        target_dir = self.cb_targets.get()
-        if not target_dir or not Path(target_dir).is_dir():
+        target_dir = self.target_var.get()
+        if not target_dir or target_dir == 'Select Folder...' or not os.path.isdir(target_dir):
             messagebox.showwarning("No Destination", "Please select a valid destination folder from the 'Move to:' dropdown first.")
             return
 
         if not messagebox.askyesno("Move All", f"Are you sure you want to move all {len(self.pairs)} duplicates currently listed to:\n\n{target_dir}?"): return
 
         target_path = Path(target_dir)
-        self._save_target(target_dir)
+        self._save_target()
         operations = []
         restore_index = self.current_index
         count = 0
@@ -952,16 +973,16 @@ class ReviewDialog:
         self._load_pair()
 
     def move_dupe(self):
-        tgt = self.cb_targets.get()
-        if not tgt or not Path(tgt).is_dir():
+        target_dir = self.target_var.get()
+        if not target_dir or target_dir == 'Select Folder...' or not os.path.isdir(target_dir):
             messagebox.showwarning("No Destination", "Please select a valid destination folder.")
             return
         try:
-            dest = Path(tgt) / self.dupe.name
-            if dest.exists(): dest = Path(tgt) / f"{self.dupe.stem}_{int(time.time())}{self.dupe.suffix}"
+            dest = Path(target_dir) / self.dupe.name
+            if dest.exists(): dest = Path(target_dir) / f"{self.dupe.stem}_{int(time.time())}{self.dupe.suffix}"
             shutil.move(str(self.dupe), str(dest))
             operations = [(dest, self.dupe)]
-            self._save_target(tgt)
+            self._save_target()
             self.undo_stack.append((operations, self.current_index))
             self.next_pair()
         except Exception as e: messagebox.showerror("Error", str(e))
