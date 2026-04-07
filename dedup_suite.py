@@ -163,17 +163,73 @@ class DatabaseManager:
             
             return {"golden": golden_count, "legacy": legacy_count}
 
-    def get_duplicate_groups(self, scan_mode="Exact", threshold=0):
+    def get_mine_stats(self):
+        with self.conn:
+            cur = self.conn.cursor()
+            try:
+                cur.execute("PRAGMA table_info(file_index)")
+                columns = [info[1] for info in cur.fetchall()]
+                if 'is_golden' not in columns:
+                    golden_files = 0
+                else:
+                    cur.execute("SELECT COUNT(*) FROM file_index WHERE is_golden = 1")
+                    golden_files = cur.fetchone()[0]
+                
+                cur.execute("SELECT COUNT(*) FROM file_index")
+                total_files = cur.fetchone()[0]
+                
+                cur.execute("SELECT SUM(file_size) FROM file_index")
+                total_storage = cur.fetchone()[0] or 0
+            except Exception:
+                total_files = 0
+                golden_files = 0
+                total_storage = 0
+                
+            return {
+                "total_files": total_files,
+                "golden_files": golden_files,
+                "total_storage": total_storage
+            }
+
+    def get_recent_golden_files(self, limit=50):
+        with self.conn:
+            cur = self.conn.cursor()
+            try:
+                cur.execute("PRAGMA table_info(file_index)")
+                columns = [info[1] for info in cur.fetchall()]
+                if 'is_golden' not in columns:
+                    return []
+                
+                cur.execute('''
+                    SELECT full_path FROM file_index 
+                    WHERE is_golden = 1 
+                    ORDER BY modified_time DESC 
+                    LIMIT ?
+                ''', (limit,))
+                return [row[0] for row in cur.fetchall()]
+            except Exception:
+                return []
+
+    def get_duplicate_groups(self, scan_mode='Exact', threshold=0, limit=100, offset=0):
         groups = []
+        total = 0
         with self.conn:
             cur = self.conn.cursor()
             if "Exact" in scan_mode:
-                cur.execute("SELECT sha256_hash FROM file_index WHERE sha256_hash IS NOT NULL GROUP BY sha256_hash HAVING COUNT(rowid) > 1")
+                cur.execute("SELECT COUNT(*) FROM (SELECT sha256_hash FROM file_index WHERE sha256_hash IS NOT NULL GROUP BY sha256_hash HAVING COUNT(rowid) > 1)")
+                row = cur.fetchone()
+                total = row[0] if row else 0
+                
+                cur.execute("SELECT sha256_hash FROM file_index WHERE sha256_hash IS NOT NULL GROUP BY sha256_hash HAVING COUNT(rowid) > 1 LIMIT ? OFFSET ?", (limit, offset))
                 for (h,) in cur.fetchall():
                     cur.execute("SELECT full_path FROM file_index WHERE sha256_hash = ?", (h,))
                     groups.append([Path(row[0]) for row in cur.fetchall()])
             else:
-                cur.execute("SELECT phash, full_path FROM file_index WHERE phash IS NOT NULL")
+                cur.execute("SELECT COUNT(*) FROM file_index WHERE phash IS NOT NULL")
+                row = cur.fetchone()
+                total = row[0] if row else 0
+                
+                cur.execute("SELECT phash, full_path FROM file_index WHERE phash IS NOT NULL LIMIT ? OFFSET ?", (limit, offset))
                 records = cur.fetchall()
                 
                 fingerprints = []
@@ -203,7 +259,7 @@ class DatabaseManager:
                                 visited.add(c_path)
                     if len(group) > 1:
                         groups.append(group)
-        return groups
+        return groups, total
 
     def close(self):
         if self.conn:
@@ -282,7 +338,7 @@ class IconFactory:
 class FileAuditor:
     def __init__(self, root_path, move_to=None, delete=False, dry_run=True, threads=4, report_file=None, 
                  log_callback=None, progress_callback=None, stop_event=None, ignore_exts=None, ignore_folders=None, 
-                 threshold=0, review_mode=False, pause_event=None, db_manager=None):
+                 threshold=0, review_mode=False, pause_event=None, db_manager=None, session_id=None):
         self.root_path = Path(root_path).resolve()
         self.move_to = Path(move_to).resolve() if move_to else None
         self.delete = delete
@@ -298,6 +354,7 @@ class FileAuditor:
         self.threshold = threshold
         self.review_mode = review_mode
         self.db_manager = db_manager
+        self.session_id = session_id
         self.device_id = get_drive_id(self.root_path)
         self.files_scanned = 0
         self.duplicates_found = 0
@@ -392,7 +449,8 @@ class FileAuditor:
                                 "file_size": s,
                                 "modified_time": mtime,
                                 "full_path": str(fp),
-                                "device_id": self.device_id
+                                "device_id": self.device_id,
+                                "last_session_id": getattr(self, 'session_id', None)
                             })
                     completed += 1
                     self.update_progress(completed, len(full_tasks), f"Hashing: {completed}/{len(full_tasks)}")
@@ -493,7 +551,8 @@ class VideoFileAuditor(FileAuditor):
                                 "file_size": size,
                                 "modified_time": mtime,
                                 "full_path": str(fp),
-                                "device_id": self.device_id
+                                "device_id": self.device_id,
+                                "last_session_id": getattr(self, 'session_id', None)
                             })
                     completed += 1
                     self.update_progress(completed, len(files), f"Analyzing: {completed}/{len(files)}")
@@ -611,7 +670,7 @@ class FolderMerger:
 # ==========================================
 
 class ReviewDialog:
-    def __init__(self, parent, duplicate_groups, move_to_path=None, precomputed_hashes=None, threshold=5):
+    def __init__(self, parent, duplicate_groups, total_groups=0, db_manager=None, scan_mode="Exact", move_to_path=None, precomputed_hashes=None, threshold=5):
         self.top = ctk.CTkToplevel(parent)
         self.top.title("Review Duplicates")
         self._center_window(1100, 650)
@@ -621,6 +680,9 @@ class ReviewDialog:
         self.top.grab_set()
 
         self.groups = duplicate_groups
+        self.total_groups = total_groups
+        self.db_manager = db_manager
+        self.scan_mode = scan_mode
         self.move_to_path = move_to_path
         self.hash_cache = precomputed_hashes if precomputed_hashes else {}
         self.threshold = threshold
@@ -644,7 +706,7 @@ class ReviewDialog:
         self.extensions = set()
         for group in self.groups:
             try:
-                group.sort(key=lambda x: (-x.stat().st_size, x.stat().st_ctime))
+                # Trust the DB: index 0 is explicitly the Golden version
                 pair = (group[0], group[1])
                 self.all_pairs.append(pair)
                 self.extensions.add(pair[1].suffix.lower())
@@ -697,11 +759,13 @@ class ReviewDialog:
         self.lbl_stats.pack(side="right", padx=20, pady=10)
         
         # Images
-        f_img = ctk.CTkFrame(self.top, fg_color="transparent")
-        f_img.pack(fill="both", expand=True, padx=20, pady=10)
+        self.f_content = ctk.CTkFrame(self.top, fg_color="transparent")
+        self.f_content.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        self.f_img = ctk.CTkFrame(self.f_content, fg_color="transparent")
         
         # Left (Original)
-        f_left = ctk.CTkFrame(f_img)
+        f_left = ctk.CTkFrame(self.f_img)
         f_left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         ctk.CTkLabel(f_left, text="Original (Keep)", font=("Segoe UI", 14, "bold")).pack(pady=5)
         self.lbl_orig = ctk.CTkLabel(f_left, text="Loading Preview...")
@@ -710,7 +774,7 @@ class ReviewDialog:
         self.lbl_orig_path.pack(fill="x", pady=10, padx=10)
 
         # Right (Duplicate)
-        f_right = ctk.CTkFrame(f_img)
+        f_right = ctk.CTkFrame(self.f_img)
         f_right.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
         ctk.CTkLabel(f_right, text="Duplicate (Delete)", font=("Segoe UI", 14, "bold"), text_color="#ff6666").pack(pady=5)
         self.lbl_dupe = ctk.CTkLabel(f_right, text="Loading Preview...")
@@ -718,8 +782,11 @@ class ReviewDialog:
         self.lbl_dupe_path = ctk.CTkLabel(f_right, text="", wraplength=450, justify="center", font=("Segoe UI", 11))
         self.lbl_dupe_path.pack(fill="x", pady=10, padx=10)
         
-        f_img.columnconfigure(0, weight=1); f_img.columnconfigure(1, weight=1)
-        f_img.rowconfigure(0, weight=1)
+        self.f_img.columnconfigure(0, weight=1); self.f_img.columnconfigure(1, weight=1)
+        self.f_img.rowconfigure(0, weight=1)
+        
+        # Metadata View
+        self.f_metadata = ctk.CTkScrollableFrame(self.f_content, fg_color="transparent")
         
         self._bind_context_menu(self.lbl_orig, True)
         self._bind_context_menu(self.lbl_orig_path, True)
@@ -733,10 +800,10 @@ class ReviewDialog:
         # Left controls
         f_c_left = ctk.CTkFrame(f_ctrl, fg_color="transparent")
         f_c_left.pack(side="left")
-        ctk.CTkButton(f_c_left, text="Smart Select", image=self.icons['check'], compound="left", command=self.smart_select, width=120).pack(side="left", padx=5, anchor="center")
-        ctk.CTkButton(f_c_left, text="Find Similar", image=self.icons['search'], compound="left", command=self.find_similar, width=120).pack(side="left", padx=5, anchor="center")
-        if HAS_REPORTLAB: ctk.CTkButton(f_c_left, text="PDF", image=self.icons['save'], compound="left", command=self.export_pdf, width=80).pack(side="left", padx=5, anchor="center")
-        ctk.CTkButton(f_c_left, text="CSV", image=self.icons['save'], compound="left", command=self.export_csv, width=80).pack(side="left", padx=5, anchor="center")
+        ctk.CTkButton(f_c_left, text="Smart Select", image=self.icons['check'], compound="left", command=self.smart_select, width=120).pack(side="left", padx=5, pady=10, anchor="center")
+        ctk.CTkButton(f_c_left, text="Find Similar", image=self.icons['search'], compound="left", command=self.find_similar, width=120).pack(side="left", padx=5, pady=10, anchor="center")
+        if HAS_REPORTLAB: ctk.CTkButton(f_c_left, text="PDF", image=self.icons['save'], compound="left", command=self.export_pdf, width=80).pack(side="left", padx=5, pady=10, anchor="center")
+        ctk.CTkButton(f_c_left, text="CSV", image=self.icons['save'], compound="left", command=self.export_csv, width=80).pack(side="left", padx=5, pady=10, anchor="center")
         
         # Center controls (Move)
         f_c_center = ctk.CTkFrame(f_ctrl, fg_color="transparent")
@@ -754,15 +821,15 @@ class ReviewDialog:
                 self.target_var.set(d)
                 self._save_target()
             
-        ctk.CTkButton(f_c_center, text="Browse", image=self.icons['folder'], compound="left", command=browse_target, width=80).pack(side="left", padx=5, anchor="center")
-        ctk.CTkButton(f_c_center, text="Move", image=self.icons['arrow'], compound="left", command=self.move_dupe, width=80).pack(side="left", anchor="center")
+        ctk.CTkButton(f_c_center, text="Browse", image=self.icons['folder'], compound="left", command=browse_target, width=80).pack(side="left", padx=5, pady=10, anchor="center")
+        ctk.CTkButton(f_c_center, text="Move", image=self.icons['arrow'], compound="left", command=self.move_dupe, width=80).pack(side="left", pady=10, anchor="center")
         
         # Right controls
         f_c_right = ctk.CTkFrame(f_ctrl, fg_color="transparent")
         f_c_right.pack(side="right")
-        ctk.CTkButton(f_c_right, text="Undo", image=self.icons['refresh'], compound="left", fg_color="gray", command=self.undo_last, width=80).pack(side="right", padx=5, anchor="center")
-        ctk.CTkButton(f_c_right, text="Skip >", image=self.icons['arrow'], compound="right", command=self.next_pair, width=80).pack(side="right", padx=5, anchor="center")
-        ctk.CTkButton(f_c_right, text="DELETE", image=self.icons['trash'], compound="left", fg_color="#C92C2C", hover_color="#992222", command=self.delete_dupe, width=100).pack(side="right", padx=10, anchor="center")
+        ctk.CTkButton(f_c_right, text="Undo", image=self.icons['refresh'], compound="left", fg_color="gray", command=self.undo_last, width=80).pack(side="right", padx=5, pady=10, anchor="center")
+        ctk.CTkButton(f_c_right, text="Skip >", image=self.icons['arrow'], compound="right", command=self.next_pair, width=80).pack(side="right", padx=5, pady=10, anchor="center")
+        ctk.CTkButton(f_c_right, text="DELETE", image=self.icons['trash'], compound="left", fg_color="#C92C2C", hover_color="#992222", command=self.delete_dupe, width=100).pack(side="right", padx=10, pady=10, anchor="center")
         
         self.lbl_prog = ctk.CTkLabel(f_ctrl, text="0/0", font=("Segoe UI", 12, "bold"))
         self.lbl_prog.pack(side="right", padx=20)
@@ -827,8 +894,19 @@ class ReviewDialog:
         for i, (orig, dupe) in enumerate(self.pairs):
             if not dupe.exists(): continue
             try:
-                dest_file = target_path / dupe.name
-                if dest_file.exists(): dest_file = target_path / f"{dupe.stem}_{int(time.time())}_{i}{dupe.suffix}"
+                mtime = os.path.getmtime(dupe)
+                date_str = time.strftime('%Y-%m-%d', time.localtime(mtime))
+                folder_name = f"{date_str}_Archive"
+                
+                stem = dupe.stem
+                if sum(c.isalpha() for c in stem) > 5 and not stem.upper().startswith(('IMG_', 'DSC', 'SCAN_')):
+                    folder_name += f"_{stem}"
+                    
+                sub_folder = target_path / folder_name
+                sub_folder.mkdir(parents=True, exist_ok=True)
+                
+                dest_file = sub_folder / dupe.name
+                if dest_file.exists(): dest_file = sub_folder / f"{dupe.stem}_{int(time.time())}_{i}{dupe.suffix}"
                 shutil.move(str(dupe), str(dest_file))
                 operations.append((dest_file, dupe))
                 count += 1
@@ -842,6 +920,8 @@ class ReviewDialog:
 
     def _load_pair(self):
         if self.current_index >= len(self.pairs):
+            self.f_metadata.pack_forget()
+            self.f_img.pack(fill="both", expand=True)
             self.lbl_orig.configure(image=None, text="No more duplicates.")
             self.lbl_dupe.configure(image=None, text="")
             self.lbl_orig_path.configure(text="")
@@ -852,12 +932,22 @@ class ReviewDialog:
         self.lbl_prog.configure(text=f"Pair {self.current_index+1} of {len(self.pairs)}")
         self.lbl_stats.configure(text=f"Showing {len(self.pairs)} pairs")
         
-        # Update Paths
-        self.lbl_orig_path.configure(text=f"{self.orig}\nSize: {self._fmt_size(self.orig)}")
-        self.lbl_dupe_path.configure(text=f"{self.dupe}\nSize: {self._fmt_size(self.dupe)}")
+        ext = self.orig.suffix.lower()
+        visual_exts = {'.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.webp'}
         
-        self._show_img(self.lbl_orig, self.orig)
-        self._show_img(self.lbl_dupe, self.dupe)
+        if ext in visual_exts:
+            self.f_metadata.pack_forget()
+            self.f_img.pack(fill="both", expand=True)
+            # Update Paths
+            self.lbl_orig_path.configure(text=f"{self.orig}\nSize: {self._fmt_size(self.orig)}")
+            self.lbl_dupe_path.configure(text=f"{self.dupe}\nSize: {self._fmt_size(self.dupe)}")
+            
+            self._show_img(self.lbl_orig, self.orig)
+            self._show_img(self.lbl_dupe, self.dupe)
+        else:
+            self.f_img.pack_forget()
+            self.f_metadata.pack(fill="both", expand=True)
+            self.show_metadata_view((self.orig, self.dupe))
 
     def _fmt_size(self, path):
         try:
@@ -891,17 +981,26 @@ class ReviewDialog:
             if self.latest_requests.get(lbl) != path: return None
 
             try:
-                if path.suffix.lower() in {'.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v'}:
+                ext = path.suffix.lower()
+                video_exts = {'.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v'}
+                image_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.webp'}
+                
+                if ext in video_exts:
                     cap = cv2.VideoCapture(str(path))
-                    if not cap.isOpened(): return None
+                    if not cap.isOpened(): return {"type": "error", "message": "No Preview Available"}
                     cap.set(cv2.CAP_PROP_POS_FRAMES, int(cap.get(cv2.CAP_PROP_FRAME_COUNT) * 0.5))
                     ret, frame = cap.read()
                     cap.release()
-                    if not ret: return None
+                    if not ret: return {"type": "error", "message": "No Preview Available"}
                     img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                elif ext in image_exts:
+                    try:
+                        img = Image.open(str(path))
+                        img.load()
+                    except Exception:
+                        return {"type": "error", "message": "No Preview Available"}
                 else:
-                    img = Image.open(str(path))
-                    img.load()
+                    return {"type": "text", "message": f"{ext.upper() if ext else 'Unknown'} File\n{path.name}"}
                 
                 # SECOND EXIT: Check again before heavy processing (resizing)
                 if self.latest_requests.get(lbl) != path: return None
@@ -911,10 +1010,10 @@ class ReviewDialog:
                     img = img.convert('RGB')
                 img.thumbnail((400, 400))
                 # Return raw data to prevent cross-thread object issues
-                return (img.tobytes(), img.size, img.mode)
+                return {"type": "image", "data": img.tobytes(), "size": img.size, "mode": img.mode}
             except Exception as e:
                 print(f"Error loading preview for {path}: {e}")
-                return None
+                return {"type": "error", "message": "No Preview Available"}
 
         def on_loaded(future):
             # Clean up future reference
@@ -927,29 +1026,100 @@ class ReviewDialog:
 
             try:
                 result = future.result()
-                if result:
-                    raw_data, size, mode = result
-                    # Recreate image in main thread
-                    img = Image.frombytes(mode, size, raw_data)
+                if result and isinstance(result, dict):
+                    if result["type"] == "image":
+                        raw_data, size, mode = result["data"], result["size"], result["mode"]
+                        # Recreate image in main thread
+                        img = Image.frombytes(mode, size, raw_data)
 
-                    # Create CTkImage. Size is required for display.
+                        # Create CTkImage. Size is required for display.
+                        ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=size)
+                        
+                        # Cache the result (limit size to avoid memory issues)
+                        if len(self.thumbnail_cache) > 200: self.thumbnail_cache.clear()
+                        self.thumbnail_cache[path] = ctk_img
+                        
+                        lbl.configure(image=ctk_img, text="")
+                        lbl.image = ctk_img
+                    else:
+                        lbl.configure(image=None, text=result["message"])
+                        lbl.image = None
+                elif result and isinstance(result, tuple):
+                    raw_data, size, mode = result
+                    img = Image.frombytes(mode, size, raw_data)
                     ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=size)
-                    
-                    # Cache the result (limit size to avoid memory issues)
                     if len(self.thumbnail_cache) > 200: self.thumbnail_cache.clear()
                     self.thumbnail_cache[path] = ctk_img
-                    
                     lbl.configure(image=ctk_img, text="")
                     lbl.image = ctk_img
                 else:
                     lbl.configure(image=None, text="[Preview Error]")
+                    lbl.image = None
             except Exception as e:
                 print(f"Error displaying preview: {e}")
                 lbl.configure(image=None, text="[Display Error]")
+                lbl.image = None
 
         future = self.preview_executor.submit(load_task)
         self.active_futures[lbl] = future
         future.add_done_callback(lambda f: self.top.after(0, on_loaded, f))
+
+    def show_metadata_view(self, pair):
+        if not hasattr(self, '_metadata_rows'):
+            self._metadata_rows = []
+            
+        orig, dupe = pair
+        duplicates = [dupe]
+        try: duplicates.sort(key=lambda d: d.stat().st_mtime)
+        except: pass
+
+        total_needed = 1 + len(duplicates)
+        
+        while len(self._metadata_rows) < total_needed:
+            f_row = ctk.CTkFrame(self.f_metadata)
+            f_row.columnconfigure(0, weight=1)
+            
+            lbl_title = ctk.CTkLabel(f_row, text="", font=("Segoe UI", 14, "bold"))
+            lbl_title.grid(row=0, column=0, sticky="w", padx=10, pady=(10,0))
+            
+            lbl_details = ctk.CTkLabel(f_row, text="", justify="left")
+            lbl_details.grid(row=1, column=0, sticky="w", padx=10, pady=(5,10))
+            
+            btn_open = ctk.CTkButton(f_row, text="Open File Location", width=130)
+            btn_open.grid(row=0, column=1, rowspan=2, sticky="e", padx=20, pady=10)
+            
+            self._metadata_rows.append((f_row, lbl_title, lbl_details, btn_open))
+            
+        for r in self._metadata_rows:
+            r[0].pack_forget()
+            
+        def update_row(idx, title, path, is_golden):
+            f_row, lbl_title, lbl_details, btn_open = self._metadata_rows[idx]
+            f_row.pack(fill="x", pady=5, padx=10)
+            
+            try:
+                mtime = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(path.stat().st_mtime))
+                size = self._fmt_size(path)
+            except:
+                mtime = "Unknown"
+                size = "Unknown"
+                
+            color = "#2CC985" if is_golden else "#ff6666"
+            lbl_title.configure(text=title, text_color=color)
+            lbl_details.configure(text=f"Path: {path}\nSize: {size}  |  Modified: {mtime}")
+            btn_open.configure(command=lambda p=path: self._ctx_action_path(p, 'folder'))
+
+        update_row(0, "Golden Version", orig, True)
+        for i, d in enumerate(duplicates):
+            update_row(i+1, f"Duplicate Version {i+1}" if len(duplicates)>1 else "Duplicate Version", d, False)
+
+    def _ctx_action_path(self, path, action):
+        if action == 'folder' and path.exists():
+            try:
+                if platform.system() == 'Windows': subprocess.Popen(f'explorer /select,"{path}"')
+                elif platform.system() == 'Darwin': subprocess.call(['open', '-R', path])
+                else: subprocess.call(['xdg-open', path.parent])
+            except: pass
 
     def delete_dupe(self):
         try:
@@ -978,8 +1148,20 @@ class ReviewDialog:
             messagebox.showwarning("No Destination", "Please select a valid destination folder.")
             return
         try:
-            dest = Path(target_dir) / self.dupe.name
-            if dest.exists(): dest = Path(target_dir) / f"{self.dupe.stem}_{int(time.time())}{self.dupe.suffix}"
+            target_path = Path(target_dir)
+            mtime = os.path.getmtime(self.dupe)
+            date_str = time.strftime('%Y-%m-%d', time.localtime(mtime))
+            folder_name = f"{date_str}_Archive"
+            
+            stem = self.dupe.stem
+            if sum(c.isalpha() for c in stem) > 5 and not stem.upper().startswith(('IMG_', 'DSC', 'SCAN_')):
+                folder_name += f"_{stem}"
+                
+            sub_folder = target_path / folder_name
+            sub_folder.mkdir(parents=True, exist_ok=True)
+            
+            dest = sub_folder / self.dupe.name
+            if dest.exists(): dest = sub_folder / f"{self.dupe.stem}_{int(time.time())}{self.dupe.suffix}"
             shutil.move(str(self.dupe), str(dest))
             operations = [(dest, self.dupe)]
             self._save_target()
@@ -1175,6 +1357,7 @@ class DedupApp:
         self.t_audit = self.nb.add("Audit / Dedup")
         self.t_merge = self.nb.add("Merge Folders")
         self.t_settings = self.nb.add("Settings")
+        self.t_datamine = self.nb.add("Data Mine")
         
         f_log = ctk.CTkFrame(self.root, fg_color="transparent")
         f_log.pack(fill="x", padx=20, pady=(10, 5))
@@ -1191,6 +1374,7 @@ class DedupApp:
         self._init_audit_tab()
         self._init_merge_tab()
         self._init_settings_tab()
+        self._init_datamine_tab()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def _center_window(self, width, height):
@@ -1315,12 +1499,332 @@ class DedupApp:
         ctk.CTkButton(f_extras, text="Create Shortcut", command=self.create_shortcut).pack(side="left", expand=True, padx=5)
         ctk.CTkButton(f_extras, text="Report Bug", command=self.report_bug).pack(side="left", expand=True, padx=5)
 
+    def _init_datamine_tab(self):
+        # 1. Danger Zone (Bottom - Priority 1)
+        self.f_danger_zone = ctk.CTkFrame(self.t_datamine, fg_color='transparent')
+        self.f_danger_zone.pack(side='bottom', fill='x', padx=20, pady=20)
+
+        ctk.CTkLabel(self.f_danger_zone, text='Recovery & Maintenance', font=('Segoe UI', 12, 'bold')).pack(anchor='w')
+
+        self.btn_revert = ctk.CTkButton(self.f_danger_zone, text='Revert Last Archive', command=self.revert_last_archive, fg_color='#757575')
+        self.btn_revert.pack(side='left', padx=5, pady=5)
+
+        self.btn_clear_log = ctk.CTkButton(self.f_danger_zone, text='Clear Transaction Log', command=self.clear_archive_history, fg_color='#757575')
+        self.btn_clear_log.pack(side='left', padx=5, pady=5)
+
+        # 2. Summary (Top - Priority 2)
+        f_card = ctk.CTkFrame(self.t_datamine)
+        f_card.pack(side='top', fill="x", padx=20, pady=10)
+        
+        lbl_title = ctk.CTkLabel(f_card, text="Data Mine Summary", font=("Segoe UI", 18, "bold"), text_color="#212121")
+        lbl_title.pack(anchor="w", padx=15, pady=(15, 5))
+        
+        self.lbl_tot_files = ctk.CTkLabel(f_card, text="Total Files Indexed: 0")
+        self.lbl_tot_files.pack(anchor="w", padx=15, pady=2)
+        
+        self.lbl_golden = ctk.CTkLabel(f_card, text="Total Unique (Golden) Files: 0")
+        self.lbl_golden.pack(anchor="w", padx=15, pady=2)
+        
+        self.lbl_storage = ctk.CTkLabel(f_card, text="Total Storage Used: 0 B")
+        self.lbl_storage.pack(anchor="w", padx=15, pady=(2, 10))
+        
+        btn_rationalize = ctk.CTkButton(f_card, text="Rationalize", fg_color="#009688", hover_color="#00796B", command=self.rationalize_mine)
+        btn_rationalize.pack(anchor="w", padx=15, pady=(0, 15))
+        
+        # 3. Archive Button (Middle-Top)
+        self.archive_dry_run_var = tk.BooleanVar(value=True)
+        ctk.CTkCheckBox(self.t_datamine, text="Dry Run (Simulation Mode)", variable=self.archive_dry_run_var).pack(side='top', pady=10)
+        
+        btn_archive = ctk.CTkButton(self.t_datamine, text="Launch Bulk Archive (Safety First)", font=("Segoe UI", 14, "bold"), fg_color="#E5A00D", hover_color="#B37D0A", command=self.execute_bulk_archive)
+        btn_archive.pack(side='top', pady=10)
+        
+        # 4. Results (Middle-Fill)
+        ctk.CTkLabel(self.t_datamine, text="Recent Golden Files", font=("Segoe UI", 14, "bold")).pack(side='top', anchor="w", padx=20, pady=(10, 0))
+        self.txt_golden = ctk.CTkTextbox(self.t_datamine)
+        self.txt_golden.pack(side='top', fill="both", expand=True, padx=20, pady=(5, 20))
+        self.txt_golden.configure(state="disabled")
+        
+        self.update_datamine_stats()
+
+    def rationalize_mine(self):
+        self.db_manager.identify_golden_versions()
+        self.update_datamine_stats()
+        self.log("Rationalization complete. Data Mine Summary updated.")
+
+    def update_datamine_stats(self):
+        stats = self.db_manager.get_mine_stats()
+        self.lbl_tot_files.configure(text=f"Total Files Indexed: {stats['total_files']}")
+        self.lbl_golden.configure(text=f"Total Unique (Golden) Files: {stats['golden_files']}")
+        
+        s = stats['total_storage']
+        storage_str = f"{s} B"
+        for u in ['B','KB','MB','GB']:
+            if s < 1024:
+                storage_str = f"{s:.2f} {u}"
+                break
+            s /= 1024
+        else:
+            storage_str = f"{s:.2f} TB"
+            
+        self.lbl_storage.configure(text=f"Total Storage Used: {storage_str}")
+        
+        recent = self.db_manager.get_recent_golden_files(50)
+        self.txt_golden.configure(state="normal")
+        self.txt_golden.delete(1.0, tk.END)
+        for p in recent:
+            self.txt_golden.insert(tk.END, p + "\n")
+        self.txt_golden.configure(state="disabled")
+
+    def execute_bulk_archive(self):
+        if getattr(self, 'current_session_id', None) is None:
+            messagebox.showwarning("No Session", "Please run an Audit first to establish a session for archiving.")
+            return
+            
+        # 1. Ensure status column exists
+        with self.db_manager.conn:
+            cur = self.db_manager.conn.cursor()
+            cur.execute("PRAGMA table_info(file_index)")
+            columns = [info[1] for info in cur.fetchall()]
+            if 'status' not in columns:
+                self.db_manager.conn.execute("ALTER TABLE file_index ADD COLUMN status TEXT DEFAULT 'active'")
+                
+        # 2. Get target directory
+        target_dir = filedialog.askdirectory(title="Select Target Archive Folder")
+        if not target_dir:
+            return
+            
+        target_path = Path(target_dir)
+        
+        # Strict Scope Lock: Get the current search directory
+        active_path = self.src_var.get()
+        if not active_path or not os.path.isdir(active_path):
+            messagebox.showwarning("No Source", "Please select a valid Source directory in the 'Audit / Dedup' tab to limit the archive scope.")
+            return
+            
+        
+        # 3. Query DB for duplicates
+        with self.db_manager.conn:
+            cur = self.db_manager.conn.cursor()
+            
+            cur.execute("SELECT COUNT(*) FROM file_index WHERE is_golden = 0 AND last_session_id = ? AND full_path LIKE ?", (self.current_session_id, f"{active_path}%"))
+            popup_count = cur.fetchone()[0]
+
+            sql = "SELECT rowid, full_path, file_size, modified_time FROM file_index WHERE is_golden = 0 AND last_session_id = ? AND full_path LIKE ? AND (status != 'archived' OR status IS NULL)"
+            cur.execute(sql, (self.current_session_id, f"{active_path}%"))
+            records = cur.fetchall()
+            
+        if popup_count == 0 or not records:
+            messagebox.showinfo("Info", f"Found 0 files to archive within [{Path(active_path).name}] for this session.")
+            return
+            
+        # 3. Pre-flight check
+        total_size = sum(r[2] or 0 for r in records)
+        free_space = shutil.disk_usage(target_path).free
+        
+        if free_space < total_size:
+            req_gb = total_size / (1024**3)
+            free_gb = free_space / (1024**3)
+            messagebox.showerror("Error", f"Insufficient disk space!\n\nRequired: {req_gb:.2f} GB\nAvailable: {free_gb:.2f} GB")
+            return
+            
+        is_dry_run = self.archive_dry_run_var.get()
+        action_word = "simulate archiving" if is_dry_run else "archive"
+        
+        current_folder = Path(active_path).name
+        size_mb = total_size / (1024 * 1024)
+        msg = f"Found {popup_count} duplicates within [{current_folder}]. Total size: {size_mb:.2f} MB.\n\nReady to {action_word}. Proceed?"
+        if not messagebox.askyesno("Confirm Archive", msg):
+            return
+            
+        # 4. UI Progress Setup
+        archive_win = ctk.CTkToplevel(self.root)
+        archive_win.title("Bulk Archiving")
+        archive_win.geometry("400x200")
+        archive_win.transient(self.root)
+        archive_win.grab_set()
+        
+        ctk.CTkLabel(archive_win, text="Moving files to archive...", font=("Segoe UI", 14, "bold")).pack(pady=(20, 10))
+        pbar = ctk.CTkProgressBar(archive_win, width=300)
+        pbar.pack(pady=10)
+        pbar.set(0)
+        
+        lbl_status = ctk.CTkLabel(archive_win, text="Preparing...")
+        lbl_status.pack(pady=5)
+        
+        stop_archive = threading.Event()
+        btn_cancel = ctk.CTkButton(archive_win, text="Cancel", fg_color="#C92C2C", hover_color="#992222", command=lambda: [stop_archive.set(), lbl_status.configure(text="Canceling... please wait.")])
+        btn_cancel.pack(pady=10)
+        
+        self.archived_count = 0
+        self.archived_bytes = 0
+        
+        # 5. The Move Loop
+        def archive_task():
+            simulated_moves = set()
+            csv_entries = []
+            
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            report_path = target_path / f"Archive_Manifest_{timestamp}.csv"
+            transaction_id = timestamp
+
+            try:
+                for i, (rowid, fp_str, size, mtime) in enumerate(records):
+                    if stop_archive.is_set(): break
+                    src_path = Path(fp_str)
+                    if not src_path.exists(): continue
+                    try:
+                        mtime_val = mtime if mtime else os.path.getmtime(src_path)
+                        date_str = time.strftime('%Y-%m-%d', time.localtime(mtime_val))
+                        dest_folder = target_path / f"{date_str}_Archive"
+                        
+                        if not is_dry_run:
+                            dest_folder.mkdir(parents=True, exist_ok=True)
+                        
+                        dest_file = dest_folder / src_path.name
+                        counter = 2
+                        while dest_file.exists() or str(dest_file) in simulated_moves:
+                            dest_file = dest_folder / f"{src_path.stem}_v{counter}{src_path.suffix}"
+                            counter += 1
+                            
+                        status_str = "SIMULATED" if is_dry_run else "MOVED"
+                        
+                        if is_dry_run:
+                            simulated_moves.add(str(dest_file))
+                        else:
+                            shutil.move(str(src_path), str(dest_file))
+                            with self.db_manager.conn:
+                                self.db_manager.conn.execute("UPDATE file_index SET full_path = ?, status = 'archived', pre_archive_path = ?, archive_transaction_id = ? WHERE rowid = ?", (str(dest_file), str(src_path), transaction_id, rowid))
+                        
+                        size_mb = f"{(size or 0) / (1024 * 1024):.2f}"
+                        csv_entries.append([status_str, src_path.name, str(src_path), str(dest_file), time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(mtime_val)), size_mb, transaction_id, self.current_session_id])
+                        self.archived_count += 1; self.archived_bytes += (size or 0)
+                        status_verb = "Simulated" if is_dry_run else "Moved"
+                        
+                        if self.archived_count % 1000 == 0:
+                            self.log(f"Bulk Archive: {status_verb} {self.archived_count} files...")
+                            
+                        self.root.after(0, lambda p=(i+1)/len(records), c=self.archived_count, t=len(records), v=status_verb: (pbar.set(p), lbl_status.configure(text=f"{v} {c} of {t} files...")))
+                    except Exception as e: self.log(f"Archive Error on {src_path.name}: {e}")
+            finally:
+                if csv_entries:
+                    try:
+                        with open(report_path, "w", newline="", encoding="utf-8") as f:
+                            writer = csv.writer(f)
+                            writer.writerow(["Status", "Filename", "Original Path", "New Path", "Modified Date", "File Size (MB)", "Transaction ID", "Session ID"])
+                            writer.writerows(csv_entries)
+                    except Exception as e:
+                        self.log(f"Could not create CSV manifest: {e}")
+                    
+            action_done = "simulated" if is_dry_run else "archived"
+            msg = f"Successfully {action_done} {self.archived_count} files (Totaling {self.archived_bytes / (1024**3):.2f} GB)."
+            if report_path.exists():
+                msg += f"\n\nReport saved to: {report_path.name}"
+                try:
+                    if platform.system() == 'Windows': os.startfile(report_path)
+                    elif platform.system() == 'Darwin': subprocess.call(['open', str(report_path)])
+                    else: subprocess.call(['xdg-open', str(report_path)])
+                except: pass
+            
+            self.root.after(0, lambda: [archive_win.destroy(), messagebox.showinfo("Archive Complete", msg), self.update_datamine_stats()])
+        threading.Thread(target=archive_task, daemon=True).start()
+
+    def revert_last_archive(self):
+        with self.db_manager.conn:
+            cur = self.db_manager.conn.cursor()
+            cur.execute("SELECT archive_transaction_id FROM file_index WHERE archive_transaction_id IS NOT NULL ORDER BY archive_transaction_id DESC LIMIT 1")
+            res = cur.fetchone()
+            if not res:
+                messagebox.showinfo("Info", "No recent archives found to revert.")
+                return
+            last_tx_id = res[0]
+            cur.execute("SELECT rowid, full_path, pre_archive_path FROM file_index WHERE archive_transaction_id = ?", (last_tx_id,))
+            records = cur.fetchall()
+
+        if not records:
+            messagebox.showinfo("Info", "No files found in the last archive transaction.")
+            return
+
+        if not messagebox.askyesno("Confirm Revert", f"Are you sure you want to revert {len(records)} files from the previous archive?"):
+            return
+
+        revert_win = ctk.CTkToplevel(self.root)
+        revert_win.title("Reverting Archive")
+        revert_win.geometry("400x200")
+        revert_win.transient(self.root)
+        revert_win.grab_set()
+        
+        ctk.CTkLabel(revert_win, text="Moving files back...", font=("Segoe UI", 14, "bold")).pack(pady=(20, 10))
+        pbar = ctk.CTkProgressBar(revert_win, width=300)
+        pbar.pack(pady=10)
+        pbar.set(0)
+        
+        lbl_status = ctk.CTkLabel(revert_win, text="Preparing...")
+        lbl_status.pack(pady=5)
+        
+        def revert_task():
+            reverted_count = 0
+            errors = 0
+            for i, (rowid, current_path_str, pre_archive_path_str) in enumerate(records):
+                try:
+                    curr_path = Path(current_path_str)
+                    orig_path = Path(pre_archive_path_str)
+                    
+                    if curr_path.exists():
+                        orig_path.parent.mkdir(parents=True, exist_ok=True)
+                        dest_file = orig_path
+                        counter = 2
+                        while dest_file.exists():
+                            dest_file = orig_path.parent / f"{orig_path.stem}_v{counter}{orig_path.suffix}"
+                            counter += 1
+                        
+                        shutil.move(str(curr_path), str(dest_file))
+                        with self.db_manager.conn:
+                            self.db_manager.conn.execute("UPDATE file_index SET full_path = ?, status = 'active', pre_archive_path = NULL, archive_transaction_id = NULL WHERE rowid = ?", (str(dest_file), rowid))
+                        reverted_count += 1
+                        self.root.after(0, lambda p=(i+1)/len(records), c=reverted_count, t=len(records): (pbar.set(p), lbl_status.configure(text=f"Reverted {c} of {t} files...")))
+                    else:
+                        errors += 1
+                except Exception as e:
+                    self.log(f"Revert Error on {current_path_str}: {e}")
+                    errors += 1
+
+            msg = f"Successfully reverted {reverted_count} files."
+            if errors > 0:
+                msg += f"\nEncountered {errors} errors during revert. Check log for details."
+            self.root.after(0, lambda: [revert_win.destroy(), messagebox.showinfo("Revert Complete", msg), self.update_datamine_stats()])
+            
+        threading.Thread(target=revert_task, daemon=True).start()
+
+    def clear_archive_history(self):
+        """Permanently clears the transaction log to save space and finalize archives."""
+        if not messagebox.askyesno("Confirm Clear", 
+            "This will permanently forget where archived files came from.\n\n"
+            "The 'Revert' function will no longer work for past moves. Proceed?"):
+            return
+
+        try:
+            with self.db_manager.conn:
+                # 1. Clear the 'flight recorder' columns
+                self.db_manager.conn.execute(
+                    "UPDATE file_index SET pre_archive_path = NULL, archive_transaction_id = NULL"
+                )
+            # 2. Reclaim disk space (must be outside the transaction block)
+            self.db_manager.conn.execute("VACUUM")
+            
+            messagebox.showinfo("Success", "Transaction history cleared and database compacted.")
+            self.update_datamine_stats()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to clear history: {e}")
+
     def start_audit(self):
         self.stop_event.clear()
         self.pause_event.set()
         self.btn_start.configure(state="disabled")
         self.btn_stop.configure(state="normal")
         self.btn_pause.configure(state="normal", text="Pause")
+        
+        self.current_session_id = str(uuid.uuid4())
+        
         cls = VideoFileAuditor if self.mode_var.get() == "Visual/Video" else FileAuditor
 
         ignore_exts = [e.strip() for e in self.settings.get('ignore_exts', '').split(',') if e.strip()]
@@ -1328,34 +1832,45 @@ class DedupApp:
 
         auditor = cls(self.src_var.get(), log_callback=self.log, progress_callback=self.progress,
                       review_mode=self.review_var.get(), stop_event=self.stop_event, pause_event=self.pause_event, threshold=self.settings.get('threshold', 0),
-                      threads=self.settings.get('threads', 4), ignore_exts=ignore_exts, ignore_folders=ignore_folders, db_manager=self.db_manager)
+                      threads=self.settings.get('threads', 4), ignore_exts=ignore_exts, ignore_folders=ignore_folders, db_manager=self.db_manager, session_id=self.current_session_id)
         def run():
             try:
                 auditor.run()
                 
-                stats = self.db_manager.identify_golden_versions()
-                self.log(f"Database Stats - Golden Files: {stats['golden']} | Legacy Duplicates: {stats['legacy']}")
+                stats = self.db_manager.identify_golden_versions(session_id=self.current_session_id)
+                
+                active_path = self.src_var.get()
+                with self.db_manager.conn:
+                    cur = self.db_manager.conn.cursor()
+                    cur.execute("SELECT COUNT(*) FROM file_index WHERE is_golden = 0 AND last_session_id = ? AND full_path LIKE ?", (self.current_session_id, f"{active_path}%"))
+                    local_count = cur.fetchone()[0]
+                
+                self.root.after(0, self.update_datamine_stats)
                 
                 if self.review_var.get():
-                    groups = self.db_manager.get_duplicate_groups(scan_mode=self.mode_var.get(), threshold=self.settings.get('threshold', 0))
-                    if groups:
-                        self.root.after(0, self._show_review, groups, getattr(auditor, 'hash_cache', {}))
+                    groups, total = self.db_manager.get_duplicate_groups(scan_mode=self.mode_var.get(), threshold=self.settings.get('threshold', 0), limit=100, offset=0, session_id=self.current_session_id)
+                    if local_count > 0:
+                        msg = f"Audit Complete. {local_count} duplicates found in this session. You can now Review manually or Launch Bulk Archive in the Data Mine tab."
+                        self.root.after(0, lambda m=msg: messagebox.showinfo("Audit Complete", m))
                     else:
-                        self.log("Scan complete. No duplicates found.")
-                        self.root.after(0, lambda: messagebox.showinfo("Scan Complete", "No duplicates were found."))
+                        self.log("Scan complete. No session duplicates found.")
+                        self.root.after(0, lambda: messagebox.showinfo("Scan Complete", "No duplicates were found for this session."))
             except Exception as e:
                 self.log(f"Error during scan: {e}")
             finally:
                 self.root.after(0, self.reset_scan_buttons)
-        threading.Thread(target=run).start()
+        threading.Thread(target=run, daemon=True).start()
 
-    def _show_review(self, groups, hash_cache):
-        self.review_dialog = ReviewDialog(self.root, groups, precomputed_hashes=hash_cache, 
+    def _show_review(self, groups, total, hash_cache):
+        self.review_dialog = ReviewDialog(self.root, groups, total, self.db_manager, self.mode_var.get(), precomputed_hashes=hash_cache, 
                                           threshold=self.settings.get('threshold', 5))
 
     def start_merge(self):
-        merger = FolderMerger(self.m_master.get(), self.m_inc.get(), log_callback=self.log, progress_callback=self.progress, dry_run=self.m_dry.get())
-        threading.Thread(target=merger.run).start()
+        merger = FolderMerger(self.m_master.get(), self.m_inc.get(), log_callback=self.log, progress_callback=self.progress, dry_run=self.m_dry.get(), db_manager=self.db_manager)
+        def run_merger():
+            merger.run()
+            self.root.after(0, self.update_datamine_stats)
+        threading.Thread(target=run_merger, daemon=True).start()
 
     def on_close(self):
         self.stop_event.set() # Signal any running threads to stop
@@ -1364,6 +1879,7 @@ class DedupApp:
         self.cfg.save(self.settings)
         self.db_manager.close()
         self.root.destroy()
+        os._exit(0) # Forcefully and safely release the terminal prompt back to the user
 
     def stop_scan(self):
         self.stop_event.set()
