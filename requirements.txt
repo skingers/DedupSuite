@@ -1,6 +1,23 @@
-Pillow
-opencv-python-headless
-imagehash
-reportlab
-numpy
-customtkinter
+# --- DedupSuite v2.0 Core Dependencies ---
+
+# High-performance UI Framework
+customtkinter==5.2.2
+
+# Image processing for UI icons and thumbnails
+Pillow>=10.2.0
+
+# Database Engine (Standard Library, included for reference)
+# sqlite3
+
+# GUI Theme and styling
+darkdetect==0.8.0
+
+# Security and Hashing (Standard Library, included for reference)
+# hashlib
+
+# File System Operations (Standard Library, included for reference)
+# shutil
+# os
+# pathlib
+
+# --- End of Requirements ---
