@@ -120,16 +120,34 @@ class DatabaseManager:
                     FOREIGN KEY(device_id) REFERENCES devices(device_id)
                 )
             ''')
+            try:
+                self.conn.execute("ALTER TABLE file_index ADD COLUMN last_session_id TEXT")
+            except sqlite3.OperationalError:
+                pass
 
     def index_file(self, data):
         with self.conn:
             self.conn.execute('''
                 INSERT OR REPLACE INTO file_index 
-                (sha256_hash, phash, file_name, file_size, modified_time, full_path, device_id)
-                VALUES (:sha256_hash, :phash, :file_name, :file_size, :modified_time, :full_path, :device_id)
+                (sha256_hash, phash, file_name, file_size, modified_time, full_path, device_id, last_session_id)
+                VALUES (:sha256_hash, :phash, :file_name, :file_size, :modified_time, :full_path, :device_id, :last_session_id)
             ''', data)
 
-    def identify_golden_versions(self):
+    def mark_duplicates(self, duplicates, session_id=None):
+        with self.conn:
+            for dupe in duplicates:
+                if session_id:
+                    self.conn.execute(
+                        "UPDATE file_index SET is_golden = 0, last_session_id = ? WHERE full_path = ?", 
+                        (session_id, str(dupe))
+                    )
+                else:
+                    self.conn.execute(
+                        "UPDATE file_index SET is_golden = 0 WHERE full_path = ?", 
+                        (str(dupe),)
+                    )
+
+    def identify_golden_versions(self, session_id=None):
         with self.conn:
             cur = self.conn.cursor()
             cur.execute("PRAGMA table_info(file_index)")
@@ -137,29 +155,48 @@ class DatabaseManager:
             if 'is_golden' not in columns:
                 self.conn.execute("ALTER TABLE file_index ADD COLUMN is_golden INTEGER DEFAULT 0")
 
-            # Reset all flags to 0 before calculating
-            self.conn.execute("UPDATE file_index SET is_golden = 0")
+            if session_id:
+                # Assume files in the current session are golden initially
+                self.conn.execute("UPDATE file_index SET is_golden = 1 WHERE last_session_id = ?", (session_id,))
+                
+                # Mark as 0 ONLY if the hash already exists in older database records
+                # OR if it's a duplicate within the same session (not the MIN rowid)
+                self.conn.execute('''
+                    UPDATE file_index 
+                    SET is_golden = 0 
+                    WHERE last_session_id = ? 
+                      AND sha256_hash IS NOT NULL 
+                      AND EXISTS (
+                          SELECT 1 FROM file_index f2 
+                          WHERE f2.sha256_hash = file_index.sha256_hash 
+                            AND f2.rowid < file_index.rowid
+                      )
+                ''', (session_id,))
+            else:
+                self.conn.execute("UPDATE file_index SET is_golden = 1")
+                self.conn.execute('''
+                    UPDATE file_index 
+                    SET is_golden = 0 
+                    WHERE sha256_hash IS NOT NULL 
+                      AND EXISTS (
+                          SELECT 1 FROM file_index f2 
+                          WHERE f2.sha256_hash = file_index.sha256_hash 
+                            AND f2.rowid < file_index.rowid
+                      )
+                ''')
             
-            # Find the row with the maximum modified_time for each sha256_hash group
-            # and set its is_golden flag to 1
-            self.conn.execute('''
-                UPDATE file_index
-                SET is_golden = 1
-                WHERE rowid IN (
-                    SELECT rowid FROM (
-                        SELECT rowid, MAX(modified_time)
-                        FROM file_index
-                        WHERE sha256_hash IS NOT NULL
-                        GROUP BY sha256_hash
-                    )
-                )
-            ''')
-            
-            cur.execute("SELECT COUNT(*) FROM file_index WHERE is_golden = 1")
-            golden_count = cur.fetchone()[0]
-            
-            cur.execute("SELECT COUNT(*) FROM file_index WHERE is_golden = 0 AND sha256_hash IS NOT NULL")
-            legacy_count = cur.fetchone()[0]
+            if session_id:
+                cur.execute("SELECT COUNT(*) FROM file_index WHERE is_golden = 1 AND last_session_id = ?", (session_id,))
+                golden_count = cur.fetchone()[0]
+                
+                cur.execute("SELECT COUNT(*) FROM file_index WHERE is_golden = 0 AND sha256_hash IS NOT NULL AND last_session_id = ?", (session_id,))
+                legacy_count = cur.fetchone()[0]
+            else:
+                cur.execute("SELECT COUNT(*) FROM file_index WHERE is_golden = 1")
+                golden_count = cur.fetchone()[0]
+                
+                cur.execute("SELECT COUNT(*) FROM file_index WHERE is_golden = 0 AND sha256_hash IS NOT NULL")
+                legacy_count = cur.fetchone()[0]
             
             return {"golden": golden_count, "legacy": legacy_count}
 
@@ -210,26 +247,41 @@ class DatabaseManager:
             except Exception:
                 return []
 
-    def get_duplicate_groups(self, scan_mode='Exact', threshold=0, limit=100, offset=0):
+    def get_duplicate_groups(self, scan_mode='Exact', threshold=0, limit=100, offset=0, session_id=None):
         groups = []
         total = 0
         with self.conn:
             cur = self.conn.cursor()
             if "Exact" in scan_mode:
-                cur.execute("SELECT COUNT(*) FROM (SELECT sha256_hash FROM file_index WHERE sha256_hash IS NOT NULL GROUP BY sha256_hash HAVING COUNT(rowid) > 1)")
-                row = cur.fetchone()
-                total = row[0] if row else 0
-                
-                cur.execute("SELECT sha256_hash FROM file_index WHERE sha256_hash IS NOT NULL GROUP BY sha256_hash HAVING COUNT(rowid) > 1 LIMIT ? OFFSET ?", (limit, offset))
+                if session_id:
+                    cur.execute("SELECT COUNT(DISTINCT sha256_hash) FROM file_index WHERE sha256_hash IS NOT NULL AND is_golden = 0 AND last_session_id = ?", (session_id,))
+                    row = cur.fetchone()
+                    total = row[0] if row else 0
+                    
+                    cur.execute("SELECT sha256_hash FROM file_index WHERE sha256_hash IS NOT NULL AND is_golden = 0 AND last_session_id = ? GROUP BY sha256_hash LIMIT ? OFFSET ?", (session_id, limit, offset))
+                else:
+                    cur.execute("SELECT COUNT(*) FROM (SELECT sha256_hash FROM file_index WHERE sha256_hash IS NOT NULL GROUP BY sha256_hash HAVING COUNT(rowid) > 1)")
+                    row = cur.fetchone()
+                    total = row[0] if row else 0
+                    
+                    cur.execute("SELECT sha256_hash FROM file_index WHERE sha256_hash IS NOT NULL GROUP BY sha256_hash HAVING COUNT(rowid) > 1 LIMIT ? OFFSET ?", (limit, offset))
+                    
                 for (h,) in cur.fetchall():
-                    cur.execute("SELECT full_path FROM file_index WHERE sha256_hash = ?", (h,))
+                    cur.execute("SELECT full_path FROM file_index WHERE sha256_hash = ? ORDER BY is_golden DESC, modified_time ASC", (h,))
                     groups.append([Path(row[0]) for row in cur.fetchall()])
             else:
-                cur.execute("SELECT COUNT(*) FROM file_index WHERE phash IS NOT NULL")
-                row = cur.fetchone()
-                total = row[0] if row else 0
-                
-                cur.execute("SELECT phash, full_path FROM file_index WHERE phash IS NOT NULL LIMIT ? OFFSET ?", (limit, offset))
+                if session_id:
+                    cur.execute("SELECT COUNT(*) FROM file_index WHERE phash IS NOT NULL AND last_session_id = ?", (session_id,))
+                    row = cur.fetchone()
+                    total = row[0] if row else 0
+                    
+                    cur.execute("SELECT phash, full_path FROM file_index WHERE phash IS NOT NULL AND last_session_id = ? LIMIT ? OFFSET ?", (session_id, limit, offset))
+                else:
+                    cur.execute("SELECT COUNT(*) FROM file_index WHERE phash IS NOT NULL")
+                    row = cur.fetchone()
+                    total = row[0] if row else 0
+                    
+                    cur.execute("SELECT phash, full_path FROM file_index WHERE phash IS NOT NULL LIMIT ? OFFSET ?", (limit, offset))
                 records = cur.fetchall()
                 
                 fingerprints = []
@@ -398,31 +450,9 @@ class FileAuditor:
                     if self.files_scanned % 100 == 0: self.update_progress(0, 1, f"Scanning: {self.files_scanned} files") # Use 0/1 for indeterminate
                 except OSError: continue
 
-        potential_dupes = {s: p for s, p in size_map.items() if len(p) > 1}
-        
-        # Phase 1: Partial Hashing (Pre-screen)
-        partial_tasks = [(fp, s) for s, paths in potential_dupes.items() for fp in paths]
-        full_tasks = []
+        # Force every file into the hashing executor to ensure the session_id is saved!
+        full_tasks = [(fp, s) for s, paths in size_map.items() for fp in paths]
         processed_groups = defaultdict(lambda: defaultdict(list))
-        
-        if partial_tasks:
-            self.update_progress(0, len(partial_tasks), "Pre-screening files...")
-            partial_map = defaultdict(list)
-            with concurrent.futures.ThreadPoolExecutor(max_workers=self.threads) as executor:
-                future_to_file = {executor.submit(self.get_partial_hash, fp): (fp, s) for fp, s in partial_tasks}
-                completed = 0
-                for future in concurrent.futures.as_completed(future_to_file):
-                    self.pause_event.wait()
-                    if self.stop_event.is_set(): break
-                    fp, s = future_to_file[future]
-                    ph = future.result()
-                    if ph: partial_map[(s, ph)].append(fp)
-                    completed += 1
-                    self.update_progress(completed, len(partial_tasks), f"Pre-screening: {completed}/{len(partial_tasks)}")
-            
-            for (s, ph), paths in partial_map.items():
-                if len(paths) > 1:
-                    for fp in paths: full_tasks.append((fp, s))
 
         # Phase 2: Full Hashing
         if full_tasks and not self.stop_event.is_set():
@@ -442,16 +472,20 @@ class FileAuditor:
                                 mtime = fp.stat().st_mtime
                             except Exception:
                                 mtime = 0.0
-                            self.db_manager.index_file({
-                                "sha256_hash": h,
-                                "phash": None,
-                                "file_name": fp.name,
-                                "file_size": s,
-                                "modified_time": mtime,
-                                "full_path": str(fp),
-                                "device_id": self.device_id,
-                                "last_session_id": getattr(self, 'session_id', None)
-                            })
+                                
+                            with self.db_manager.conn:
+                                cur = self.db_manager.conn.cursor()
+                                cur.execute('''
+                                    UPDATE file_index 
+                                    SET sha256_hash = ?, file_size = ?, modified_time = ?, last_session_id = ? 
+                                    WHERE full_path = ?
+                                ''', (h, s, mtime, self.session_id, str(fp)))
+                                
+                                if cur.rowcount == 0:
+                                    cur.execute('''
+                                        INSERT INTO file_index (sha256_hash, phash, file_name, file_size, modified_time, full_path, device_id, last_session_id)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                    ''', (h, None, fp.name, s, mtime, str(fp), self.device_id, self.session_id))
                     completed += 1
                     self.update_progress(completed, len(full_tasks), f"Hashing: {completed}/{len(full_tasks)}")
 
@@ -544,16 +578,20 @@ class VideoFileAuditor(FileAuditor):
                             except Exception:
                                 mtime = 0.0
                                 size = 0
-                            self.db_manager.index_file({
-                                "sha256_hash": None,
-                                "phash": str(res),
-                                "file_name": fp.name,
-                                "file_size": size,
-                                "modified_time": mtime,
-                                "full_path": str(fp),
-                                "device_id": self.device_id,
-                                "last_session_id": getattr(self, 'session_id', None)
-                            })
+                            
+                            with self.db_manager.conn:
+                                cur = self.db_manager.conn.cursor()
+                                cur.execute('''
+                                    UPDATE file_index 
+                                    SET phash = ?, file_size = ?, modified_time = ?, last_session_id = ? 
+                                    WHERE full_path = ?
+                                ''', (str(res), size, mtime, self.session_id, str(fp)))
+                                
+                                if cur.rowcount == 0:
+                                    cur.execute('''
+                                        INSERT INTO file_index (sha256_hash, phash, file_name, file_size, modified_time, full_path, device_id, last_session_id)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                    ''', (None, str(res), fp.name, size, mtime, str(fp), self.device_id, self.session_id))
                     completed += 1
                     self.update_progress(completed, len(files), f"Analyzing: {completed}/{len(files)}")
 
@@ -1606,11 +1644,11 @@ class DedupApp:
         with self.db_manager.conn:
             cur = self.db_manager.conn.cursor()
             
-            cur.execute("SELECT COUNT(*) FROM file_index WHERE is_golden = 0 AND last_session_id = ? AND full_path LIKE ?", (self.current_session_id, f"{active_path}%"))
+            cur.execute("SELECT COUNT(*) FROM file_index WHERE is_golden = 0 AND last_session_id = ?", (self.current_session_id,))
             popup_count = cur.fetchone()[0]
 
-            sql = "SELECT rowid, full_path, file_size, modified_time FROM file_index WHERE is_golden = 0 AND last_session_id = ? AND full_path LIKE ? AND (status != 'archived' OR status IS NULL)"
-            cur.execute(sql, (self.current_session_id, f"{active_path}%"))
+            sql = "SELECT rowid, full_path, file_size, modified_time FROM file_index WHERE is_golden = 0 AND last_session_id = ? AND (status != 'archived' OR status IS NULL)"
+            cur.execute(sql, (self.current_session_id,))
             records = cur.fetchall()
             
         if popup_count == 0 or not records:
@@ -1655,13 +1693,12 @@ class DedupApp:
         btn_cancel = ctk.CTkButton(archive_win, text="Cancel", fg_color="#C92C2C", hover_color="#992222", command=lambda: [stop_archive.set(), lbl_status.configure(text="Canceling... please wait.")])
         btn_cancel.pack(pady=10)
         
-        self.archived_count = 0
-        self.archived_bytes = 0
-        
         # 5. The Move Loop
         def archive_task():
             simulated_moves = set()
             csv_entries = []
+            moved_count = 0
+            moved_size = 0
             
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             report_path = target_path / f"Archive_Manifest_{timestamp}.csv"
@@ -1697,13 +1734,14 @@ class DedupApp:
                         
                         size_mb = f"{(size or 0) / (1024 * 1024):.2f}"
                         csv_entries.append([status_str, src_path.name, str(src_path), str(dest_file), time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(mtime_val)), size_mb, transaction_id, self.current_session_id])
-                        self.archived_count += 1; self.archived_bytes += (size or 0)
+                        moved_count += 1
+                        moved_size += (size or 0)
                         status_verb = "Simulated" if is_dry_run else "Moved"
                         
-                        if self.archived_count % 1000 == 0:
-                            self.log(f"Bulk Archive: {status_verb} {self.archived_count} files...")
+                        if moved_count % 1000 == 0:
+                            self.log(f"Bulk Archive: {status_verb} {moved_count} files...")
                             
-                        self.root.after(0, lambda p=(i+1)/len(records), c=self.archived_count, t=len(records), v=status_verb: (pbar.set(p), lbl_status.configure(text=f"{v} {c} of {t} files...")))
+                        self.root.after(0, lambda p=(i+1)/len(records), c=moved_count, t=len(records), v=status_verb: (pbar.set(p), lbl_status.configure(text=f"{v} {c} of {t} files...")))
                     except Exception as e: self.log(f"Archive Error on {src_path.name}: {e}")
             finally:
                 if csv_entries:
@@ -1716,7 +1754,7 @@ class DedupApp:
                         self.log(f"Could not create CSV manifest: {e}")
                     
             action_done = "simulated" if is_dry_run else "archived"
-            msg = f"Successfully {action_done} {self.archived_count} files (Totaling {self.archived_bytes / (1024**3):.2f} GB)."
+            msg = f"Successfully {action_done} {moved_count} files (Totaling {moved_size / (1024**3):.2f} GB)."
             if report_path.exists():
                 msg += f"\n\nReport saved to: {report_path.name}"
                 try:
@@ -1725,7 +1763,7 @@ class DedupApp:
                     else: subprocess.call(['xdg-open', str(report_path)])
                 except: pass
             
-            self.root.after(0, lambda: [archive_win.destroy(), messagebox.showinfo("Archive Complete", msg), self.update_datamine_stats()])
+            self.root.after(0, lambda m=msg: [archive_win.destroy(), messagebox.showinfo("Archive Complete", m), self.update_datamine_stats()])
         threading.Thread(target=archive_task, daemon=True).start()
 
     def revert_last_archive(self):
@@ -1840,9 +1878,10 @@ class DedupApp:
                 stats = self.db_manager.identify_golden_versions(session_id=self.current_session_id)
                 
                 active_path = self.src_var.get()
+                folder_name = os.path.basename(os.path.normpath(active_path))
                 with self.db_manager.conn:
                     cur = self.db_manager.conn.cursor()
-                    cur.execute("SELECT COUNT(*) FROM file_index WHERE is_golden = 0 AND last_session_id = ? AND full_path LIKE ?", (self.current_session_id, f"{active_path}%"))
+                    cur.execute("SELECT COUNT(*) FROM file_index WHERE is_golden = 0 AND full_path LIKE ?", (f"%{folder_name}%",))
                     local_count = cur.fetchone()[0]
                 
                 self.root.after(0, self.update_datamine_stats)
