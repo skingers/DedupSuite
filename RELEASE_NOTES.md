@@ -1,26 +1,21 @@
-# Release Notes: DedupSuite v2.0 (Stable)
+# Release Notes: DedupSuite v2.0
 
-## 🖋️ Executive Summary
-Version 2.0 represents a significant architectural shift from a "global" duplicate finder to a "stateful" information governance utility. This release introduces Session-Based Isolation and Hash-Only Audit protocols, designed specifically to manage high-volume, unstructured data environments (20,000+ files) with surgical precision.
+This release focuses on enhancing the core auditing engine's reliability, fixing critical UI reporting bugs, and strengthening data privacy protocols.
 
-## 🚀 New Features & Enhancements
+## Features & Enhancements
 
-### 🛡️ Session-Based Isolation
-* **Transactional Integrity:** Introduced a unique `session_id` for every audit. This ensures that archival actions only target files within the current search scope, preventing "historical ghosts" from contaminating active workflows.
-* **Scoped Archiving:** The Bulk Archive confirmation logic now strictly filters by the active path and session, providing an accurate pre-flight check for the task at hand.
+*   **Feature: High-Fidelity Hash Enforcement**
+    The `FileAuditor` has been upgraded to strictly calculate and enforce SHA-256 hashes for all files prior to their insertion into the database. This ensures that every record in an "Exact Audit" is based on a cryptographic signature, providing a more robust and reliable foundation for duplicate detection.
 
-### 🧬 High-Fidelity Hash Audit
-* **Cryptographic DNA:** Refactored the "Exact Audit" to prioritise SHA-256 bit-level hashing. 
-* **Metadata Independence:** The engine now correctly identifies duplicates even when file names have been altered (e.g., Windows " - copy" suffixes) or modification timestamps have changed during migration.
+## Bug Fixes
 
-### ⏪ Enhanced Recovery & Governance
-* **Transactional Revert:** Improved the robustness of the 1-click "Undo" feature, ensuring archival moves can be rolled back to their original paths using the SQLite flight-recorder.
-* **Audit Manifests (v2):** Redesigned CSV manifests to include session metadata, facilitating compliance and legal oversight.
+*   **Fix: Corrected Session Completion Metrics**
+    Resolved a critical UI silent failure where the completion popup would incorrectly report '0 duplicates' after a scan. This was traced to a session ID mismatch in the UI callback. The logic now bypasses the session ID for this specific UI report, instead relying on a wildcard search for the active directory (`%folder_name%`) to provide an accurate count of duplicates found in the target folder.
 
-## 🛠️ Bug Fixes
-* **Resolved:** `TypeError` in `FileAuditor` and `DatabaseManager` related to mismatched session arguments.
-* **Fixed:** "Ghosting" issue where the UI reported global database statistics instead of active search results.
-* **Fixed:** Layout conflict where the 'Revert' button was occasionally obscured by the scrolling results window.
+*   **Fix: Accurate Archive Operation Reporting**
+    Corrected the 'Archive Complete' popup to accurately report the physical count of files moved. The bulk archive function now iterates a local variable (`moved_count`) during the `shutil.move` loop, ensuring the final count shown to the user matches the exact number of files physically relocated on disk.
 
-## 🏛️ Strategic Alignment
-This version establishes DedupSuite as a primary tool for **Knowledge Readiness**. By ensuring data hygiene at the file-system level, v2.0 provides a clean, high-fidelity foundation for Retrieval-Augmented Generation (RAG) and LLM-based knowledge management.
+## Security
+
+*   **Security: Database Isolation**
+    To protect sensitive user data, the `data_mine.db` file (containing all scanned file paths) and its related journal are now strictly isolated from version control via an updated `.gitignore` file. This prevents accidental commits of private user information to a source repository.
