@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import sys
 import sqlite3
@@ -16,6 +18,7 @@ from tkinter import ttk, messagebox, filedialog
 import concurrent.futures
 from collections import defaultdict
 from pathlib import Path
+from typing import Any, Callable, DefaultDict, Dict, List, Optional, Set, Tuple, Union
 
 try:
     import customtkinter as ctk
@@ -45,51 +48,71 @@ except ImportError:
 #               HELPER CLASSES
 # ==========================================
 
-def get_drive_id(path):
+def get_drive_id(path: Union[str, Path]) -> str:
+    """Return a stable device identifier for the volume containing ``path``."""
     try:
         p = Path(path).resolve()
         if platform.system() == 'Windows':
-            drive = os.path.splitdrive(p)[0]
+            drive = os.path.splitdrive(str(p))[0]
             if drive:
-                output = subprocess.check_output(f'vol {drive}', shell=True, text=True, stderr=subprocess.DEVNULL)
+                # AUDIT-REVIEW: Use argument list instead of shell=True to prevent command injection.
+                vol_args = ['vol', drive]
+                creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+                output = subprocess.check_output(
+                    vol_args,
+                    text=True,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=creationflags,
+                )
                 for line in output.splitlines():
                     if 'serial number' in line.lower():
                         return line.split()[-1].strip()
         return str(os.stat(p.anchor).st_dev)
-    except Exception:
+    except (OSError, subprocess.SubprocessError, ValueError):
+        # AUDIT-REVIEW: Catch specific failures instead of bare except when resolving drive id.
         fallback_str = str(Path(path).resolve().anchor)
         return hashlib.sha256(fallback_str.encode()).hexdigest()[:16]
 
 class ConfigManager:
-    def __init__(self, filename="settings.json"):
+    """Load and persist application settings as JSON beside the executable or script."""
+
+    def __init__(self, filename: str = "settings.json") -> None:
         # Determine if running as a script or frozen exe
         if getattr(sys, 'frozen', False):
             base_path = os.path.dirname(sys.executable)
         else:
             base_path = os.path.dirname(os.path.abspath(__file__))
         self.filename = os.path.join(base_path, filename)
-        self.defaults = {
+        self.defaults: Dict[str, Any] = {
             "last_source": "", "last_dest": "", "scan_mode": "Exact Match (Fast)",
             "threshold": 0, "threads": 4, "ignore_exts": "", "ignore_folders": "",
             "theme": "light", "merge_master": "", "merge_incoming": ""
         }
 
-    def load(self):
-        if not os.path.exists(self.filename): return self.defaults.copy()
+    def load(self) -> Dict[str, Any]:
+        if not os.path.exists(self.filename):
+            return self.defaults.copy()
         try:
-            with open(self.filename, "r") as f:
+            with open(self.filename, "r", encoding="utf-8") as f:
                 config = self.defaults.copy()
                 config.update(json.load(f))
                 return config
-        except: return self.defaults.copy()
+        except (OSError, json.JSONDecodeError, TypeError):
+            # AUDIT-REVIEW: Replace bare except with explicit I/O and JSON decode errors.
+            return self.defaults.copy()
 
-    def save(self, data):
+    def save(self, data: Dict[str, Any]) -> None:
         try:
-            with open(self.filename, "w") as f: json.dump(data, f, indent=4)
-        except: pass
+            with open(self.filename, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4)
+        except OSError:
+            # AUDIT-REVIEW: Log settings persistence failures silently but safely.
+            pass
 
 class DatabaseManager:
-    def __init__(self, db_name="data_mine.db"):
+    """SQLite ledger for indexed files, golden/legacy status, and session metadata."""
+
+    def __init__(self, db_name: str = "data_mine.db") -> None:
         if getattr(sys, 'frozen', False):
             base_path = os.path.dirname(sys.executable)
         else:
@@ -98,7 +121,7 @@ class DatabaseManager:
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._create_tables()
 
-    def _create_tables(self):
+    def _create_tables(self) -> None:
         with self.conn:
             self.conn.execute('''
                 CREATE TABLE IF NOT EXISTS devices (
@@ -125,7 +148,8 @@ class DatabaseManager:
             except sqlite3.OperationalError:
                 pass
 
-    def index_file(self, data):
+    def index_file(self, data: Dict[str, Any]) -> None:
+        """Insert or replace a file row using bound named parameters (SQL-injection safe)."""
         with self.conn:
             self.conn.execute('''
                 INSERT OR REPLACE INTO file_index 
@@ -133,7 +157,7 @@ class DatabaseManager:
                 VALUES (:sha256_hash, :phash, :file_name, :file_size, :modified_time, :full_path, :device_id, :last_session_id)
             ''', data)
 
-    def mark_duplicates(self, duplicates, session_id=None):
+    def mark_duplicates(self, duplicates: List[Union[str, Path]], session_id: Optional[str] = None) -> None:
         with self.conn:
             for dupe in duplicates:
                 if session_id:
@@ -147,7 +171,7 @@ class DatabaseManager:
                         (str(dupe),)
                     )
 
-    def identify_golden_versions(self, session_id=None):
+    def identify_golden_versions(self, session_id: Optional[str] = None) -> Dict[str, int]:
         with self.conn:
             cur = self.conn.cursor()
             cur.execute("PRAGMA table_info(file_index)")
@@ -200,7 +224,7 @@ class DatabaseManager:
             
             return {"golden": golden_count, "legacy": legacy_count}
 
-    def get_mine_stats(self):
+    def get_mine_stats(self) -> Dict[str, int]:
         with self.conn:
             cur = self.conn.cursor()
             try:
@@ -228,7 +252,7 @@ class DatabaseManager:
                 "total_storage": total_storage
             }
 
-    def get_recent_golden_files(self, limit=50):
+    def get_recent_golden_files(self, limit: int = 50) -> List[str]:
         with self.conn:
             cur = self.conn.cursor()
             try:
@@ -247,7 +271,14 @@ class DatabaseManager:
             except Exception:
                 return []
 
-    def get_duplicate_groups(self, scan_mode='Exact', threshold=0, limit=100, offset=0, session_id=None):
+    def get_duplicate_groups(
+        self,
+        scan_mode: str = 'Exact',
+        threshold: int = 0,
+        limit: int = 100,
+        offset: int = 0,
+        session_id: Optional[str] = None,
+    ) -> Tuple[List[List[Path]], int]:
         groups = []
         total = 0
         with self.conn:
@@ -293,7 +324,9 @@ class DatabaseManager:
                         hashes = tuple(imagehash.hex_to_hash(x.strip()) for x in hexes if x.strip())
                         if hashes:
                             fingerprints.append((hashes, Path(path_str)))
-                    except Exception: pass
+                    except (ValueError, TypeError, AttributeError):
+                        # AUDIT-REVIEW: Narrow phash parse failures instead of swallowing all exceptions.
+                        pass
                 
                 visited = set()
                 for i in range(len(fingerprints)):
@@ -313,9 +346,11 @@ class DatabaseManager:
                         groups.append(group)
         return groups, total
 
-    def close(self):
+    def close(self) -> None:
+        """Close the SQLite connection if still open."""
         if self.conn:
             self.conn.close()
+            self.conn = None  # type: ignore[assignment]
 
 class IconFactory:
     @staticmethod
@@ -387,10 +422,37 @@ class IconFactory:
 #               LOGIC CLASSES
 # ==========================================
 
+def _path_within_root(child: Path, root: Path) -> bool:
+    """Return True if ``child`` resolves under ``root`` (blocks path traversal via ..)."""
+    try:
+        child.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
 class FileAuditor:
-    def __init__(self, root_path, move_to=None, delete=False, dry_run=True, threads=4, report_file=None, 
-                 log_callback=None, progress_callback=None, stop_event=None, ignore_exts=None, ignore_folders=None, 
-                 threshold=0, review_mode=False, pause_event=None, db_manager=None, session_id=None):
+    """Scan a directory tree, hash files, detect duplicates, and optionally index them in SQLite."""
+
+    def __init__(
+        self,
+        root_path: Union[str, Path],
+        move_to: Optional[Union[str, Path]] = None,
+        delete: bool = False,
+        dry_run: bool = True,
+        threads: int = 4,
+        report_file: Optional[str] = None,
+        log_callback: Optional[Callable[[str], None]] = None,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        stop_event: Optional[threading.Event] = None,
+        ignore_exts: Optional[List[str]] = None,
+        ignore_folders: Optional[List[str]] = None,
+        threshold: int = 0,
+        review_mode: bool = False,
+        pause_event: Optional[threading.Event] = None,
+        db_manager: Optional[DatabaseManager] = None,
+        session_id: Optional[str] = None,
+    ) -> None:
         self.root_path = Path(root_path).resolve()
         self.move_to = Path(move_to).resolve() if move_to else None
         self.delete = delete
@@ -412,13 +474,15 @@ class FileAuditor:
         self.duplicates_found = 0
         self.bytes_saved = 0
 
-    def get_partial_hash(self, filepath):
+    def get_partial_hash(self, filepath: Path) -> Optional[str]:
         try:
             with open(filepath, 'rb') as f:
                 return hashlib.sha256(f.read(4096)).hexdigest()
-        except: return None
+        except OSError:
+            # AUDIT-REVIEW: Handle unreadable files explicitly instead of bare except.
+            return None
 
-    def get_file_hash(self, filepath, chunk_size=1048576):
+    def get_file_hash(self, filepath: Path, chunk_size: int = 1048576) -> Optional[str]:
         hasher = hashlib.sha256()
         try:
             with open(filepath, 'rb') as f:
@@ -426,9 +490,11 @@ class FileAuditor:
                     self.pause_event.wait()
                     hasher.update(chunk)
             return hasher.hexdigest()
-        except: return None
+        except OSError:
+            # AUDIT-REVIEW: Handle unreadable files explicitly instead of bare except.
+            return None
 
-    def run(self):
+    def run(self) -> None:
         self.log(f"--- Starting Exact Audit on: {self.root_path} ---")
         size_map = defaultdict(list)
         self.update_progress(0, 0, "Scanning file sizes...")
@@ -495,12 +561,15 @@ class FileAuditor:
         
         self.log("Audit Complete.")
 
-    def handle_duplicates(self, file_list):
+    def handle_duplicates(self, file_list: List[Path]) -> None:
         if self.review_mode:
             return
         # Basic auto-resolve logic (Keep Oldest)
-        try: file_list.sort(key=lambda x: x.stat().st_ctime)
-        except: pass
+        try:
+            file_list.sort(key=lambda x: x.stat().st_ctime)
+        except OSError:
+            # AUDIT-REVIEW: Sort failures should not abort duplicate handling.
+            pass
         original = file_list[0]
         duplicates = file_list[1:]
         self.duplicates_found += len(duplicates)
@@ -509,41 +578,59 @@ class FileAuditor:
         for dupe in duplicates:
             if not self.dry_run:
                 try:
-                    if self.delete: os.remove(dupe)
-                    elif self.move_to: 
+                    if self.delete:
+                        os.remove(dupe)
+                    elif self.move_to:
+                        # AUDIT-REVIEW: Reject paths that escape the scan root before building move targets.
+                        if not _path_within_root(dupe, self.root_path):
+                            self.log(f"Skipped unsafe path (outside root): {dupe.name}")
+                            continue
                         target = self.move_to / dupe.relative_to(self.root_path)
                         target.parent.mkdir(parents=True, exist_ok=True)
                         shutil.move(str(dupe), str(target))
-                except (OSError, shutil.Error) as e: self.log(f"Error processing {dupe.name}: {e}")
+                except (OSError, shutil.Error) as e:
+                    self.log(f"Error processing {dupe.name}: {e}")
             self.log(f"  {'Deleted' if self.delete else 'Moved'}: {dupe.name}")
 
 class VideoFileAuditor(FileAuditor):
-    def __init__(self, *args, **kwargs):
+    """Perceptual-hash audit for images and video files."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.valid_extensions = {'.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.jpg', '.jpeg', '.png', '.bmp'}
-        self.hash_cache = {}
+        self.hash_cache: Dict[Path, Any] = {}
 
-    def get_fingerprint(self, filepath):
+    def get_fingerprint(self, filepath: Path) -> Optional[Tuple[Any, ...]]:
+        cap = None
         try:
             if filepath.suffix.lower() in {'.jpg', '.jpeg', '.png', '.bmp'}:
                 self.pause_event.wait()
-                with Image.open(filepath) as img: return (imagehash.phash(img),)
-            
+                with Image.open(filepath) as img:
+                    return (imagehash.phash(img),)
+
             cap = cv2.VideoCapture(str(filepath))
-            if not cap.isOpened(): return None
+            if not cap.isOpened():
+                return None
             count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            if count < 10: return None
+            if count < 10:
+                return None
             hashes = []
             for p in [0.1, 0.5, 0.9]:
                 self.pause_event.wait()
                 cap.set(cv2.CAP_PROP_POS_FRAMES, int(count * p))
                 ret, frame = cap.read()
-                if ret: hashes.append(imagehash.phash(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))))
-            cap.release()
+                if ret:
+                    hashes.append(imagehash.phash(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))))
             return tuple(hashes) if len(hashes) == 3 else None
-        except Exception: return None # Broad exception is okay here as many things can fail in video processing
+        except (OSError, cv2.error, ValueError, TypeError):
+            # AUDIT-REVIEW: Narrow media decode failures; release capture in finally below.
+            return None
+        finally:
+            # AUDIT-REVIEW: Ensure VideoCapture is released to avoid native resource leaks.
+            if cap is not None:
+                cap.release()
 
-    def run(self):
+    def run(self) -> None:
         self.log(f"--- Starting Visual/Video Audit ---")
         files = []
         for dirpath, dirnames, filenames in os.walk(self.root_path):
@@ -621,8 +708,20 @@ class VideoFileAuditor(FileAuditor):
         self.log("Audit Complete.")
 
 class FolderMerger:
-    def __init__(self, master_root, incoming_root, mode="copy", dupe_action="ignore", 
-                 log_callback=None, progress_callback=None, stop_event=None, threads=4, dry_run=False):
+    """Merge an incoming folder tree into a master folder with duplicate detection."""
+
+    def __init__(
+        self,
+        master_root: Union[str, Path],
+        incoming_root: Union[str, Path],
+        mode: str = "copy",
+        dupe_action: str = "ignore",
+        log_callback: Optional[Callable[[str], None]] = None,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        stop_event: Optional[threading.Event] = None,
+        threads: int = 4,
+        dry_run: bool = False,
+    ) -> None:
         self.master_root = Path(master_root).resolve()
         self.incoming_root = Path(incoming_root).resolve()
         self.mode = mode; self.dupe_action = dupe_action; self.dry_run = dry_run
@@ -670,26 +769,39 @@ class FolderMerger:
             if i % 5 == 0: self.update_progress(processed_bytes, total_bytes, f"Processing: {i}/{len(incoming)}")
         self.log("Merge Complete.")
 
-    def _hash(self, p):
+    def _hash(self, p: Path) -> Optional[str]:
         try:
             h = hashlib.sha256()
             with open(p, 'rb') as f:
-                while c := f.read(65536): 
-                    if self.stop_event.is_set(): return None
+                while c := f.read(65536):
+                    if self.stop_event.is_set():
+                        return None
                     h.update(c)
             return h.hexdigest()
-        except: return None
+        except OSError:
+            # AUDIT-REVIEW: Handle unreadable merge candidates explicitly.
+            return None
 
-    def _handle_dupe(self, p):
+    def _handle_dupe(self, p: Path) -> None:
         self.stats['duplicates'] += 1
-        if self.dupe_action == "delete" and not self.dry_run: os.remove(p)
+        if self.dupe_action == "delete" and not self.dry_run:
+            os.remove(p)
         elif self.dupe_action == "quarantine" and not self.dry_run:
+            # AUDIT-REVIEW: Only quarantine files that remain under the incoming root.
+            if not _path_within_root(p, self.incoming_root):
+                self.log(f"Skipped unsafe quarantine path: {p.name}")
+                return
             dest = self.quarantine_path / p.relative_to(self.incoming_root)
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(p), str(dest))
         self.log(f"Duplicate: {p.name}")
 
-    def _merge(self, p):
+    def _merge(self, p: Path) -> None:
+        # AUDIT-REVIEW: Block merge targets built from paths outside the incoming tree.
+        if not _path_within_root(p, self.incoming_root):
+            self.stats['errors'] += 1
+            self.log(f"Skipped unsafe merge path: {p.name}")
+            return
         dest = self.master_root / p.relative_to(self.incoming_root)
         if dest.exists() or (self.dry_run and str(dest) in self.simulated_paths):
             dest = dest.with_name(f"{dest.stem}_{int(time.time())}{dest.suffix}")
@@ -1151,13 +1263,18 @@ class ReviewDialog:
         for i, d in enumerate(duplicates):
             update_row(i+1, f"Duplicate Version {i+1}" if len(duplicates)>1 else "Duplicate Version", d, False)
 
-    def _ctx_action_path(self, path, action):
+    def _ctx_action_path(self, path: Path, action: str) -> None:
         if action == 'folder' and path.exists():
             try:
-                if platform.system() == 'Windows': subprocess.Popen(f'explorer /select,"{path}"')
-                elif platform.system() == 'Darwin': subprocess.call(['open', '-R', path])
-                else: subprocess.call(['xdg-open', path.parent])
-            except: pass
+                if platform.system() == 'Windows':
+                    # AUDIT-REVIEW: Pass explorer arguments as a list to avoid shell/path injection.
+                    subprocess.Popen(['explorer', '/select,', str(path.resolve())])
+                elif platform.system() == 'Darwin':
+                    subprocess.call(['open', '-R', str(path)])
+                else:
+                    subprocess.call(['xdg-open', str(path.parent)])
+            except OSError:
+                pass
 
     def delete_dupe(self):
         try:
@@ -1350,10 +1467,15 @@ class ReviewDialog:
             except: pass
         elif action == 'folder' and path.exists():
             try:
-                if platform.system() == 'Windows': subprocess.Popen(f'explorer /select,"{path}"')
-                elif platform.system() == 'Darwin': subprocess.call(['open', '-R', path])
-                else: subprocess.call(['xdg-open', path.parent])
-            except: pass
+                if platform.system() == 'Windows':
+                    # AUDIT-REVIEW: Pass explorer arguments as a list to avoid shell/path injection.
+                    subprocess.Popen(['explorer', '/select,', str(path.resolve())])
+                elif platform.system() == 'Darwin':
+                    subprocess.call(['open', '-R', str(path)])
+                else:
+                    subprocess.call(['xdg-open', str(path.parent)])
+            except OSError:
+                pass
         elif action == 'properties' and path.exists():
             self._show_properties(path)
 
