@@ -12,6 +12,7 @@ class DedupNotary:
 
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
+        self.cloud_oracle_url = "http://34.13.47.2:5000/api/v1/anchor"
 
     def batch_submit_unnotarised(self) -> None:
         """Submit unnotarised or pending hashes and store serialized OTS proofs."""
