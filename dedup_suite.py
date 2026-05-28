@@ -20,6 +20,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable, DefaultDict, Dict, List, Optional, Set, Tuple, Union
 from check_db_v2 import ensure_blockchain_schema
+from core.notary import DedupNotary
 
 try:
     import customtkinter as ctk
@@ -1503,6 +1504,7 @@ class DedupApp:
 
         self.cfg = ConfigManager()
         self.db_manager = DatabaseManager()
+        self.db_path = self.db_manager.db_path
         self.stop_event = threading.Event()
         self.pause_event = threading.Event()
         self.pause_event.set()
@@ -2009,6 +2011,14 @@ class DedupApp:
                     cur.execute("SELECT COUNT(*) FROM file_index WHERE is_golden = 0 AND full_path LIKE ?", (f"%{folder_name}%",))
                     local_count = cur.fetchone()[0]
                 
+                try:
+                    notary = DedupNotary(self.db_path)
+                    notary_thread = threading.Thread(target=notary.batch_submit_unnotarised, daemon=True)
+                    notary_thread.start()
+                except Exception as e:
+                    import sys
+                    print(f"Failed to initialize notary background thread: {e}", file=sys.stderr)
+
                 self.root.after(0, self.update_datamine_stats)
                 
                 if self.review_var.get():
