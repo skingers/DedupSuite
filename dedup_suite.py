@@ -19,6 +19,7 @@ import concurrent.futures
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable, DefaultDict, Dict, List, Optional, Set, Tuple, Union
+from check_db_v2 import ensure_blockchain_schema
 
 try:
     import customtkinter as ctk
@@ -119,7 +120,9 @@ class DatabaseManager:
             base_path = os.path.dirname(os.path.abspath(__file__))
         self.db_path = os.path.join(base_path, db_name)
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self.conn.execute("PRAGMA foreign_keys = ON;")
         self._create_tables()
+        ensure_blockchain_schema(self.db_path)
 
     def _create_tables(self) -> None:
         with self.conn:
