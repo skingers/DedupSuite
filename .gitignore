@@ -36,6 +36,13 @@ pip-log.txt
 htmlcov/
 coverage.xml
 
+# --- Brand Assets (override the blanket *.png ignore above) ---
+!assets/
+!assets/*.png
+!assets/*.svg
+# Lazily-generated raster cache (rebuilt on demand from the masters).
+assets/cache/
+
 # --- IDE & OS Workspaces ---
 .vscode/
 .idea/

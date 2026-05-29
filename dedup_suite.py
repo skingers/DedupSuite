@@ -1536,24 +1536,102 @@ class ReviewDialog:
         elif action == 'properties' and path.exists():
             self._show_properties(path)
 
+# ==========================================
+#            UI THEME CONSTANTS
+# ==========================================
+# Semantic colour palette: safe (green), caution (amber), destructive (red),
+# informational/utility (teal/grey), used consistently so users can read an
+# action's intent from its colour at a glance.
+COLOR_SAFE = "#2CC985"
+COLOR_SAFE_HOVER = "#229966"
+COLOR_CAUTION = "#E5A00D"
+COLOR_CAUTION_HOVER = "#B37D0A"
+COLOR_DANGER = "#C92C2C"
+COLOR_DANGER_HOVER = "#992222"
+# Brand cyan sampled from the DedupSuite 2.0 logo (#66FCF1). Because the fill is
+# bright, on-cyan text/icons use a near-black foreground for accessible contrast.
+COLOR_INFO = "#66FCF1"
+COLOR_INFO_HOVER = "#45CFC4"
+COLOR_ON_INFO = "#0A0A0D"
+COLOR_NEUTRAL = "#4A4D50"
+COLOR_NEUTRAL_HOVER = "#393C3E"
+COLOR_HINT = "#9A9A9A"
+BRAND_BLACK = "#0B0B0D"
+
+FONT_TITLE = ("Segoe UI", 20, "bold")
+FONT_HEADER = ("Segoe UI", 15, "bold")
+FONT_BODY = ("Segoe UI", 12)
+FONT_HINT = ("Segoe UI", 11)
+
+
+class Tooltip:
+    """Lightweight hover tooltip for any Tk/CustomTkinter widget.
+
+    CustomTkinter ships no tooltip primitive, so this binds enter/leave events
+    and shows a small borderless ``Toplevel`` after a short delay. Used to
+    explain advanced toggles without crowding the layout with descriptions.
+    """
+
+    def __init__(self, widget: Any, text: str, delay: int = 450) -> None:
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self._after_id: Optional[str] = None
+        self._tip: Optional[tk.Toplevel] = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _schedule(self, _event: Any = None) -> None:
+        self._cancel()
+        self._after_id = self.widget.after(self.delay, self._show)
+
+    def _show(self) -> None:
+        if self._tip is not None or not self.text:
+            return
+        try:
+            x = self.widget.winfo_rootx() + 20
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 8
+        except tk.TclError:
+            return
+        self._tip = tk.Toplevel(self.widget)
+        self._tip.wm_overrideredirect(True)
+        self._tip.wm_geometry(f"+{x}+{y}")
+        try:
+            self._tip.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        tk.Label(
+            self._tip, text=self.text, justify="left", bg="#2B2B2B", fg="#E6E6E6",
+            relief="solid", borderwidth=1, font=("Segoe UI", 10), padx=8, pady=5,
+            wraplength=320,
+        ).pack()
+
+    def _hide(self, _event: Any = None) -> None:
+        self._cancel()
+        if self._tip is not None:
+            self._tip.destroy()
+            self._tip = None
+
+    def _cancel(self) -> None:
+        if self._after_id is not None:
+            try:
+                self.widget.after_cancel(self._after_id)
+            except tk.TclError:
+                pass
+            self._after_id = None
+
+
 class DedupApp:
     def __init__(self):
         self.root = ctk.CTk()
-        self.root.title("File Deduplicator Suite")
-        self._center_window(1000, 600)
+        self.root.title("DedupSuite — Deduplication & Cryptographic Notary")
+        self._center_window(1100, 720)
+        self.root.minsize(940, 640)
         self.review_dialog = None
 
-        # Set application icon
-        try:
-            if getattr(sys, 'frozen', False):
-                # If running as a bundled exe, the icon is in the temp folder
-                base = sys._MEIPASS
-            else:
-                # If running as a script, the icon is next to the script
-                base = os.path.dirname(os.path.abspath(__file__))
-            icon_path = os.path.join(base, "app.ico")
-            if os.path.exists(icon_path): self.root.iconbitmap(icon_path)
-        except: pass
+        # Set application window icon (brand mark) via the lazy asset cache.
+        self._set_window_icon()
 
         self.cfg = ConfigManager()
         self.db_manager = DatabaseManager()
@@ -1568,7 +1646,11 @@ class DedupApp:
         ctk.set_default_color_theme("blue")
         
         self.icons = IconFactory.create_icons()
-        
+        # Dark-foreground icon variant for use on bright (brand cyan) fills.
+        self.icons_dark = IconFactory.create_icons(color=COLOR_ON_INFO)
+
+        self._init_header()
+
         self.nb = ctk.CTkTabview(self.root)
         self.nb.pack(fill="both", expand=True)
         
@@ -1602,6 +1684,184 @@ class DedupApp:
         y = (screen_height - height) // 2
         self.root.geometry(f'{width}x{height}+{x}+{y}')
 
+    def _asset_base(self) -> str:
+        """Return the directory that holds bundled assets (icon, wordmark).
+
+        Resolves correctly both when running from source and when frozen by
+        PyInstaller (where assets are unpacked into ``sys._MEIPASS``).
+        """
+        if getattr(sys, 'frozen', False):
+            return getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+        return os.path.dirname(os.path.abspath(__file__))
+
+    def _resolve_brand_source(self, *names: str) -> Optional[str]:
+        """Return the first existing branding source from ``assets/``.
+
+        Lets an SVG master take precedence over a raster fallback when both are
+        shipped (e.g. ``icon.svg`` before ``icon.png``).
+
+        Args:
+            *names: Candidate file names to probe inside ``assets/``.
+
+        Returns:
+            Absolute path to the first existing candidate, or ``None``.
+        """
+        assets_dir = os.path.join(self._asset_base(), "assets")
+        for name in names:
+            candidate = os.path.join(assets_dir, name)
+            if os.path.exists(candidate):
+                return candidate
+        return None
+
+    @staticmethod
+    def _rasterise_asset(source_path: str, size: Tuple[int, int]) -> Image.Image:
+        """Rasterise/resize a branding source to an RGBA image of ``size``.
+
+        SVG sources are rendered with ``cairosvg`` (imported lazily so it stays
+        an optional dependency); raster masters are resized with high-quality
+        Lanczos resampling.
+
+        Args:
+            source_path: Path to the master asset (``.svg`` or raster image).
+            size: Target ``(width, height)`` in pixels.
+
+        Returns:
+            An RGBA :class:`PIL.Image.Image` at the requested size.
+        """
+        width, height = size
+        if source_path.lower().endswith(".svg"):
+            try:
+                import cairosvg
+            except ImportError as exc:
+                raise RuntimeError(
+                    "cairosvg is required to rasterise SVG branding assets; "
+                    "install it or provide a raster (PNG) master."
+                ) from exc
+            import io
+            png_bytes = cairosvg.svg2png(
+                url=source_path, output_width=width, output_height=height
+            )
+            return Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+        return Image.open(source_path).convert("RGBA").resize((width, height), Image.LANCZOS)
+
+    def _ensure_cached_png(self, source_path: str, size: Tuple[int, int]) -> str:
+        """Return the path to a cached PNG of ``source_path`` at ``size``.
+
+        Implements the lazy-loading cache: on a hit the existing PNG path is
+        returned immediately; on a miss the source is rasterised/resized once
+        and written to ``assets/cache/``. The cache key embeds the source stem
+        and dimensions (e.g. ``icon_32.png`` / ``wordmark_320x64.png``).
+
+        Args:
+            source_path: Path to the master asset.
+            size: Target ``(width, height)`` in pixels.
+
+        Returns:
+            Absolute path to the cached PNG.
+        """
+        width, height = size
+        cache_dir = os.path.join(self._asset_base(), "assets", "cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        stem = Path(source_path).stem
+        suffix = f"{width}" if width == height else f"{width}x{height}"
+        cache_path = os.path.join(cache_dir, f"{stem}_{suffix}.png")
+        if os.path.exists(cache_path):
+            return cache_path
+        self._rasterise_asset(source_path, (width, height)).save(cache_path, format="PNG")
+        return cache_path
+
+    def get_branded_image(self, svg_path: str, size: Union[int, Tuple[int, int]]) -> ctk.CTkImage:
+        """Return a ``CTkImage`` for a branding asset, using the lazy PNG cache.
+
+        Branding sources (SVG or a high-resolution raster master) are converted
+        to a PNG of the requested size exactly once and stored under
+        ``assets/cache/``; subsequent launches load the cached PNG directly.
+        This keeps startup fast (no repeated rasterisation) without committing
+        dozens of static size variants.
+
+        Args:
+            svg_path: Path to the master asset (``.svg`` or raster image).
+            size: Target size as an int (square) or ``(width, height)`` tuple.
+
+        Returns:
+            A :class:`customtkinter.CTkImage` ready to place in a widget.
+        """
+        width, height = (size, size) if isinstance(size, int) else size
+        cached = self._ensure_cached_png(svg_path, (width, height))
+        img = Image.open(cached)
+        return ctk.CTkImage(light_image=img, dark_image=img, size=(width, height))
+
+    def _set_window_icon(self) -> None:
+        """Set the window/taskbar icon from the cached brand mark.
+
+        Uses :meth:`_ensure_cached_png` to produce a 64px PNG once, applied via
+        ``iconphoto``. A true ``.ico`` (if present) is additionally applied for
+        the best Windows title-bar rendering. All failures degrade silently.
+        """
+        try:
+            source = self._resolve_brand_source("icon.svg", "icon.png")
+            if source:
+                png_path = self._ensure_cached_png(source, (64, 64))
+                self._window_icon_photo = tk.PhotoImage(file=png_path)
+                self.root.iconphoto(True, self._window_icon_photo)
+            ico_path = os.path.join(self._asset_base(), "app.ico")
+            if os.path.exists(ico_path):
+                self.root.iconbitmap(ico_path)
+        except (tk.TclError, OSError, RuntimeError):
+            pass
+
+    def _init_header(self) -> None:
+        """Build the branded header bar shown above the tab view.
+
+        Prefers a pre-rendered wordmark lockup at ``assets/wordmark.png`` (drop
+        the official ``DEDUP SUITE 2.0`` lockup there and it is used verbatim).
+        If absent, a faithful lockup is composed from the brand icon plus the
+        wordmark text and a cyan version badge. CustomTkinter needs images
+        wrapped in :class:`CTkImage`, so references are retained on ``self`` to
+        prevent garbage collection.
+        """
+        header = ctk.CTkFrame(self.root, fg_color=BRAND_BLACK, corner_radius=0, height=66)
+        header.pack(side="top", fill="x")
+        header.pack_propagate(False)
+
+        # Preferred: official wordmark lockup image (SVG master or raster),
+        # rendered once and cached at a header-friendly height.
+        wordmark_source = self._resolve_brand_source("wordmark.svg", "wordmark.png")
+        if wordmark_source:
+            try:
+                target_h = 46
+                ratio = 4.0  # default lockup aspect; refined for raster masters
+                if not wordmark_source.lower().endswith(".svg"):
+                    with Image.open(wordmark_source) as wm:
+                        if wm.height:
+                            ratio = wm.width / wm.height
+                self._wordmark_img = self.get_branded_image(
+                    wordmark_source, (int(target_h * ratio), target_h)
+                )
+                ctk.CTkLabel(header, image=self._wordmark_img, text="").pack(
+                    side="left", padx=18, pady=10
+                )
+                return
+            except Exception:
+                pass  # fall through to composed lockup
+
+        # Fallback: brand icon + wordmark text + cyan version badge.
+        icon_source = self._resolve_brand_source("icon.svg", "icon.png")
+        if icon_source:
+            try:
+                self._brand_icon_img = self.get_branded_image(icon_source, 42)
+                ctk.CTkLabel(header, image=self._brand_icon_img, text="").pack(
+                    side="left", padx=(18, 12), pady=12
+                )
+            except Exception:
+                pass
+        ctk.CTkLabel(
+            header, text="DEDUP SUITE", font=("Segoe UI", 22, "bold"), text_color="#FFFFFF",
+        ).pack(side="left", pady=12)
+        ctk.CTkLabel(
+            header, text="2.0", font=("Segoe UI", 13, "bold"), text_color=COLOR_INFO,
+        ).pack(side="left", padx=(8, 0), pady=(16, 0), anchor="n")
+
     def log(self, msg):
         self.root.after(0, lambda: self._log_ui(msg))
 
@@ -1625,143 +1885,324 @@ class DedupApp:
         if tot > 0: self.pbar.set(cur/tot)
         self.root.title(f"Dedup Suite - {msg}")
 
+    def _section(self, parent: Any, title: str, hint: Optional[str] = None) -> Any:
+        """Create a titled "card" frame and return its content container.
+
+        Provides consistent visual grouping: a bordered card, a bold header,
+        and an optional muted hint line. Callers pack their controls into the
+        returned frame.
+
+        Args:
+            parent: The widget to pack the card into.
+            title: Section header text.
+            hint: Optional muted one-line description shown under the header.
+
+        Returns:
+            A transparent content frame inside the card for the caller's widgets.
+        """
+        card = ctk.CTkFrame(parent)
+        card.pack(fill="x", padx=20, pady=(15, 0))
+        ctk.CTkLabel(card, text=title, font=FONT_HEADER, anchor="w").pack(
+            fill="x", padx=15, pady=(12, 2)
+        )
+        if hint:
+            ctk.CTkLabel(
+                card, text=hint, font=FONT_HINT, text_color=COLOR_HINT,
+                anchor="w", justify="left",
+            ).pack(fill="x", padx=15, pady=(0, 6))
+        content = ctk.CTkFrame(card, fg_color="transparent")
+        content.pack(fill="x", padx=15, pady=(0, 14))
+        return content
+
     def _init_audit_tab(self):
-        f = ctk.CTkFrame(self.t_audit)
-        f.pack(fill="x", padx=20, pady=20)
-        
-        ctk.CTkLabel(f, text="Source:").pack(side="left", padx=10, pady=10)
+        # Step 1 — Target selection.
+        sec_target = self._section(
+            self.t_audit, "1   Select target folder",
+            hint="The folder tree that will be scanned for duplicate files.",
+        )
         self.src_var = tk.StringVar(value=self.settings["last_source"])
-        ctk.CTkEntry(f, textvariable=self.src_var).pack(side="left", fill="x", expand=True, padx=10, pady=10)
-        ctk.CTkButton(f, text="Browse", image=self.icons['folder'], compound="left", command=lambda: self.src_var.set(filedialog.askdirectory())).pack(side="left", padx=10, pady=10)
+        ctk.CTkEntry(
+            sec_target, textvariable=self.src_var,
+            placeholder_text="Choose a folder to scan…",
+        ).pack(side="left", fill="x", expand=True, padx=(0, 10))
+        ctk.CTkButton(
+            sec_target, text="Browse", image=self.icons['folder'], compound="left",
+            width=110, command=lambda: self.src_var.set(filedialog.askdirectory()),
+        ).pack(side="left")
 
-        f2 = ctk.CTkFrame(self.t_audit)
-        f2.pack(fill="x", padx=20, pady=0)
-        
+        # Step 2 — Detection mode & options.
+        sec_opts = self._section(
+            self.t_audit, "2   Detection mode & options",
+            hint="Choose how duplicates are detected and what happens after the scan.",
+        )
+        sec_opts.columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(sec_opts, text="Detection mode:", font=FONT_BODY).grid(
+            row=0, column=0, sticky="w", padx=(0, 12), pady=6
+        )
         self.mode_var = tk.StringVar(value="Exact")
-        ctk.CTkOptionMenu(f2, variable=self.mode_var, values=["Exact", "Visual/Video"]).pack(side="left", padx=10, pady=10)
-        self.review_var = tk.BooleanVar(value=True)
-        ctk.CTkCheckBox(f2, text="Review Mode", variable=self.review_var).pack(side="left", padx=10, pady=10)
+        mode_menu = ctk.CTkOptionMenu(
+            sec_opts, variable=self.mode_var, values=["Exact", "Visual/Video"], width=170,
+        )
+        mode_menu.grid(row=0, column=1, sticky="w", pady=6)
+        Tooltip(
+            mode_menu,
+            "Exact: byte-for-byte SHA-256 matches (fast, lossless files).\n"
+            "Visual/Video: perceptual hashing to catch near-identical images "
+            "and videos even after re-encoding or resizing.",
+        )
 
-        f_buttons = ctk.CTkFrame(f2, fg_color="transparent")
-        f_buttons.pack(side="right", padx=10, pady=10)
-        
-        self.btn_start = ctk.CTkButton(f_buttons, text="Start Scan", image=self.icons['play'], compound="left", fg_color="#2CC985", hover_color="#229966", command=self.start_audit)
-        self.btn_start.pack(side="left", padx=5)
-        self.btn_pause = ctk.CTkButton(f_buttons, text="Pause", image=self.icons['pause'], compound="left", fg_color="#E5A00D", hover_color="#B37D0A", command=self.toggle_pause, state="disabled")
-        self.btn_pause.pack(side="left", padx=5)
-        self.btn_stop = ctk.CTkButton(f_buttons, text="Stop", image=self.icons['stop'], compound="left", fg_color="#C92C2C", hover_color="#992222", command=self.stop_scan, state="disabled")
-        self.btn_stop.pack(side="left", padx=5)
+        self.review_var = tk.BooleanVar(value=True)
+        review_cb = ctk.CTkCheckBox(
+            sec_opts, text="Review Mode", variable=self.review_var, font=FONT_BODY,
+        )
+        review_cb.grid(row=1, column=0, columnspan=2, sticky="w", pady=6)
+        Tooltip(
+            review_cb,
+            "Manually inspect and confirm each duplicate group before anything "
+            "is moved or deleted. Strongly recommended — leave on unless you "
+            "trust automatic resolution.",
+        )
+
+        self.notarise_var = tk.BooleanVar(value=True)
+        notarise_cb = ctk.CTkCheckBox(
+            sec_opts, text="Notarise results (OpenTimestamps)",
+            variable=self.notarise_var, font=FONT_BODY,
+        )
+        notarise_cb.grid(row=2, column=0, columnspan=2, sticky="w", pady=6)
+        Tooltip(
+            notarise_cb,
+            "After the audit, anchor cryptographic proofs of your unique "
+            "(golden) files to public blockchain calendars so their existence "
+            "and integrity can be independently verified later.",
+        )
+
+        # Step 3 — Execution controls.
+        sec_run = self._section(self.t_audit, "3   Run audit")
+        self.btn_start = ctk.CTkButton(
+            sec_run, text="Start Scan", image=self.icons['play'], compound="left",
+            fg_color=COLOR_SAFE, hover_color=COLOR_SAFE_HOVER, command=self.start_audit,
+            width=150, height=40, font=FONT_BODY,
+        )
+        self.btn_start.pack(side="left", padx=(0, 10))
+        self.btn_pause = ctk.CTkButton(
+            sec_run, text="Pause", image=self.icons['pause'], compound="left",
+            fg_color=COLOR_CAUTION, hover_color=COLOR_CAUTION_HOVER,
+            command=self.toggle_pause, state="disabled", width=120, height=40, font=FONT_BODY,
+        )
+        self.btn_pause.pack(side="left", padx=(0, 10))
+        self.btn_stop = ctk.CTkButton(
+            sec_run, text="Stop", image=self.icons['stop'], compound="left",
+            fg_color=COLOR_DANGER, hover_color=COLOR_DANGER_HOVER,
+            command=self.stop_scan, state="disabled", width=120, height=40, font=FONT_BODY,
+        )
+        self.btn_stop.pack(side="left")
 
     def _init_merge_tab(self):
-        f = ctk.CTkFrame(self.t_merge)
-        f.pack(fill="x", padx=20, pady=20)
-        
         self.m_master = tk.StringVar(value=self.settings["merge_master"])
         self.m_inc = tk.StringVar(value=self.settings["merge_incoming"])
-        
-        ctk.CTkLabel(f, text="Master Folder (Destination):").pack(anchor="w", padx=10, pady=(10,0))
-        ctk.CTkEntry(f, textvariable=self.m_master).pack(fill="x", padx=10, pady=5)
-        
-        ctk.CTkLabel(f, text="Incoming Folder (Source):").pack(anchor="w", padx=10, pady=(10,0))
-        ctk.CTkEntry(f, textvariable=self.m_inc).pack(fill="x", padx=10, pady=5)
-        
+
+        sec = self._section(
+            self.t_merge, "Merge folders",
+            hint="Consolidate an incoming folder into a master folder, skipping "
+                 "files that already exist there.",
+        )
+
+        ctk.CTkLabel(sec, text="Master folder (destination):", font=FONT_BODY).pack(
+            anchor="w", pady=(0, 2)
+        )
+        master_row = ctk.CTkFrame(sec, fg_color="transparent")
+        master_row.pack(fill="x", pady=(0, 10))
+        ctk.CTkEntry(
+            master_row, textvariable=self.m_master,
+            placeholder_text="Folder that will be kept and added to…",
+        ).pack(side="left", fill="x", expand=True, padx=(0, 10))
+        ctk.CTkButton(
+            master_row, text="Browse", image=self.icons['folder'], compound="left", width=110,
+            command=lambda: self.m_master.set(filedialog.askdirectory() or self.m_master.get()),
+        ).pack(side="left")
+
+        ctk.CTkLabel(sec, text="Incoming folder (source):", font=FONT_BODY).pack(
+            anchor="w", pady=(0, 2)
+        )
+        inc_row = ctk.CTkFrame(sec, fg_color="transparent")
+        inc_row.pack(fill="x", pady=(0, 10))
+        ctk.CTkEntry(
+            inc_row, textvariable=self.m_inc,
+            placeholder_text="Folder whose unique files will be merged in…",
+        ).pack(side="left", fill="x", expand=True, padx=(0, 10))
+        ctk.CTkButton(
+            inc_row, text="Browse", image=self.icons['folder'], compound="left", width=110,
+            command=lambda: self.m_inc.set(filedialog.askdirectory() or self.m_inc.get()),
+        ).pack(side="left")
+
         self.m_dry = tk.BooleanVar(value=True)
-        ctk.CTkCheckBox(f, text="Dry Run (Simulate only)", variable=self.m_dry).pack(pady=10)
-        
-        ctk.CTkButton(f, text="Start Merge", image=self.icons['play'], compound="left", fg_color="#2CC985", hover_color="#229966", command=self.start_merge).pack(pady=20)
+        dry_cb = ctk.CTkCheckBox(
+            sec, text="Dry Run (simulate only — no files moved)",
+            variable=self.m_dry, font=FONT_BODY,
+        )
+        dry_cb.pack(anchor="w", pady=(6, 12))
+        Tooltip(
+            dry_cb,
+            "Preview exactly what would be merged without touching any files. "
+            "Turn off only once you're satisfied with the simulation.",
+        )
+
+        ctk.CTkButton(
+            sec, text="Start Merge", image=self.icons['play'], compound="left",
+            fg_color=COLOR_SAFE, hover_color=COLOR_SAFE_HOVER, command=self.start_merge,
+            width=160, height=40, font=FONT_BODY,
+        ).pack(anchor="w")
 
     def _init_settings_tab(self):
-        # Titled Frame for Settings
-        f_container = ctk.CTkFrame(self.t_settings)
-        f_container.pack(fill="x", padx=20, pady=20)
-        
-        ctk.CTkLabel(f_container, text="Global Settings", font=("Segoe UI", 16, "bold")).pack(anchor="w", padx=15, pady=(15, 5))
-        
-        f = ctk.CTkFrame(f_container, fg_color="transparent")
-        f.pack(fill="x", padx=10, pady=10)
-        
-        # Grid Layout: 2 Columns
-        f.columnconfigure(0, weight=1)
+        # Scan parameters.
+        f = self._section(
+            self.t_settings, "Scan parameters",
+            hint="Tune how the audit engine reads and filters your files.",
+        )
         f.columnconfigure(1, weight=1)
 
-        # Threshold
-        ctk.CTkLabel(f, text="Visual Similarity Threshold (0-20):").grid(row=0, column=0, sticky="w", padx=10, pady=5)
+        lbl_threshold = ctk.CTkLabel(f, text="Visual similarity threshold (0–20):", font=FONT_BODY)
+        lbl_threshold.grid(row=0, column=0, sticky="w", padx=(0, 12), pady=6)
         self.threshold_var = tk.IntVar(value=self.settings.get('threshold', 0))
-        ctk.CTkEntry(f, textvariable=self.threshold_var).grid(row=0, column=1, sticky="ew", padx=10, pady=5)
+        ent_threshold = ctk.CTkEntry(f, textvariable=self.threshold_var, width=120)
+        ent_threshold.grid(row=0, column=1, sticky="w", pady=6)
+        Tooltip(
+            lbl_threshold,
+            "Only used in Visual/Video mode. 0 = identical perceptual hash; "
+            "higher values match looser near-duplicates (8–12 is typical).",
+        )
 
-        # Threads
-        ctk.CTkLabel(f, text="Processing Threads:").grid(row=1, column=0, sticky="w", padx=10, pady=5)
+        ctk.CTkLabel(f, text="Processing threads:", font=FONT_BODY).grid(
+            row=1, column=0, sticky="w", padx=(0, 12), pady=6
+        )
         self.threads_var = tk.IntVar(value=self.settings.get('threads', 4))
-        ctk.CTkEntry(f, textvariable=self.threads_var).grid(row=1, column=1, sticky="ew", padx=10, pady=5)
+        ctk.CTkEntry(f, textvariable=self.threads_var, width=120).grid(
+            row=1, column=1, sticky="w", pady=6
+        )
 
-        # Ignore Extensions
-        ctk.CTkLabel(f, text="Ignore Extensions (e.g. .txt,.log):").grid(row=2, column=0, sticky="w", padx=10, pady=5)
+        ctk.CTkLabel(f, text="Ignore extensions (e.g. .txt,.log):", font=FONT_BODY).grid(
+            row=2, column=0, sticky="w", padx=(0, 12), pady=6
+        )
         self.ignore_exts_var = tk.StringVar(value=self.settings.get('ignore_exts', ''))
-        ctk.CTkEntry(f, textvariable=self.ignore_exts_var).grid(row=2, column=1, sticky="ew", padx=10, pady=5)
+        ctk.CTkEntry(f, textvariable=self.ignore_exts_var).grid(
+            row=2, column=1, sticky="ew", pady=6
+        )
 
-        # Ignore Folders
-        ctk.CTkLabel(f, text="Ignore Folders (e.g. .git,cache):").grid(row=3, column=0, sticky="w", padx=10, pady=5)
+        ctk.CTkLabel(f, text="Ignore folders (e.g. .git,cache):", font=FONT_BODY).grid(
+            row=3, column=0, sticky="w", padx=(0, 12), pady=6
+        )
         self.ignore_folders_var = tk.StringVar(value=self.settings.get('ignore_folders', ''))
-        ctk.CTkEntry(f, textvariable=self.ignore_folders_var).grid(row=3, column=1, sticky="ew", padx=10, pady=5)
-        
-        # Action Buttons
-        f_actions = ctk.CTkFrame(self.t_settings, fg_color="transparent")
-        f_actions.pack(fill="x", padx=20, pady=10)
-        
-        ctk.CTkButton(f_actions, text="Save Settings", image=self.icons['save'], compound="left", fg_color="gray", command=self.save_settings).pack(fill="x", pady=5)
-        ctk.CTkButton(f_actions, text="Reset to Defaults", image=self.icons['refresh'], compound="left", fg_color="gray", command=self.reset_settings).pack(fill="x", pady=5)
-        
-        f_extras = ctk.CTkFrame(self.t_settings, fg_color="transparent")
-        f_extras.pack(fill="x", padx=20, pady=10)
-        ctk.CTkButton(f_extras, text="Check for Updates", command=self.check_updates).pack(side="left", expand=True, padx=5)
-        ctk.CTkButton(f_extras, text="Create Shortcut", command=self.create_shortcut).pack(side="left", expand=True, padx=5)
-        ctk.CTkButton(f_extras, text="Report Bug", command=self.report_bug).pack(side="left", expand=True, padx=5)
+        ctk.CTkEntry(f, textvariable=self.ignore_folders_var).grid(
+            row=3, column=1, sticky="ew", pady=6
+        )
+
+        # Persist / reset.
+        f_actions = self._section(self.t_settings, "Configuration")
+        btn_row = ctk.CTkFrame(f_actions, fg_color="transparent")
+        btn_row.pack(fill="x")
+        ctk.CTkButton(
+            btn_row, text="Save Settings", image=self.icons['save'], compound="left",
+            fg_color=COLOR_SAFE, hover_color=COLOR_SAFE_HOVER, command=self.save_settings,
+            height=38, font=FONT_BODY,
+        ).pack(side="left", expand=True, fill="x", padx=(0, 6))
+        ctk.CTkButton(
+            btn_row, text="Reset to Defaults", image=self.icons['refresh'], compound="left",
+            fg_color=COLOR_NEUTRAL, hover_color=COLOR_NEUTRAL_HOVER, command=self.reset_settings,
+            height=38, font=FONT_BODY,
+        ).pack(side="left", expand=True, fill="x", padx=(6, 0))
+
+        # Application utilities.
+        f_extras = self._section(self.t_settings, "Application")
+        extras_row = ctk.CTkFrame(f_extras, fg_color="transparent")
+        extras_row.pack(fill="x")
+        for label, cmd in (
+            ("Check for Updates", self.check_updates),
+            ("Create Shortcut", self.create_shortcut),
+            ("Report Bug", self.report_bug),
+        ):
+            ctk.CTkButton(
+                extras_row, text=label, fg_color=COLOR_NEUTRAL, hover_color=COLOR_NEUTRAL_HOVER,
+                command=cmd, height=36, font=FONT_BODY,
+            ).pack(side="left", expand=True, fill="x", padx=4)
 
     def _init_datamine_tab(self):
-        # 1. Danger Zone (Bottom - Priority 1)
-        self.f_danger_zone = ctk.CTkFrame(self.t_datamine, fg_color='transparent')
-        self.f_danger_zone.pack(side='bottom', fill='x', padx=20, pady=20)
+        # Danger / maintenance zone pinned to the bottom (built first so it
+        # reserves space before the fill region above it).
+        self.f_danger_zone = ctk.CTkFrame(self.t_datamine)
+        self.f_danger_zone.pack(side='bottom', fill='x', padx=20, pady=(0, 15))
 
-        ctk.CTkLabel(self.f_danger_zone, text='Recovery & Maintenance', font=('Segoe UI', 12, 'bold')).pack(anchor='w')
+        ctk.CTkLabel(
+            self.f_danger_zone, text='Recovery & Maintenance',
+            font=("Segoe UI", 12, "bold"), text_color=COLOR_CAUTION,
+        ).pack(anchor='w', padx=15, pady=(10, 4))
 
-        self.btn_revert = ctk.CTkButton(self.f_danger_zone, text='Revert Last Archive', command=self.revert_last_archive, fg_color='#757575')
-        self.btn_revert.pack(side='left', padx=5, pady=5)
+        danger_row = ctk.CTkFrame(self.f_danger_zone, fg_color="transparent")
+        danger_row.pack(fill="x", padx=15, pady=(0, 12))
+        self.btn_revert = ctk.CTkButton(
+            danger_row, text='Revert Last Archive', command=self.revert_last_archive,
+            fg_color=COLOR_NEUTRAL, hover_color=COLOR_NEUTRAL_HOVER, height=36, font=FONT_BODY,
+        )
+        self.btn_revert.pack(side='left', padx=(0, 8))
+        Tooltip(self.btn_revert, "Undo the most recent bulk archive operation, restoring moved files to their original locations.")
+        self.btn_clear_log = ctk.CTkButton(
+            danger_row, text='Clear Transaction Log', command=self.clear_archive_history,
+            fg_color=COLOR_NEUTRAL, hover_color=COLOR_NEUTRAL_HOVER, height=36, font=FONT_BODY,
+        )
+        self.btn_clear_log.pack(side='left')
+        Tooltip(self.btn_clear_log, "Permanently delete the archive transaction history. Revert will no longer be possible afterwards.")
 
-        self.btn_clear_log = ctk.CTkButton(self.f_danger_zone, text='Clear Transaction Log', command=self.clear_archive_history, fg_color='#757575')
-        self.btn_clear_log.pack(side='left', padx=5, pady=5)
-
-        # 2. Summary (Top - Priority 2)
+        # Summary card (top).
         f_card = ctk.CTkFrame(self.t_datamine)
-        f_card.pack(side='top', fill="x", padx=20, pady=10)
-        
-        lbl_title = ctk.CTkLabel(f_card, text="Data Mine Summary", font=("Segoe UI", 18, "bold"), text_color="#212121")
-        lbl_title.pack(anchor="w", padx=15, pady=(15, 5))
-        
-        self.lbl_tot_files = ctk.CTkLabel(f_card, text="Total Files Indexed: 0")
-        self.lbl_tot_files.pack(anchor="w", padx=15, pady=2)
-        
-        self.lbl_golden = ctk.CTkLabel(f_card, text="Total Unique (Golden) Files: 0")
-        self.lbl_golden.pack(anchor="w", padx=15, pady=2)
-        
-        self.lbl_storage = ctk.CTkLabel(f_card, text="Total Storage Used: 0 B")
-        self.lbl_storage.pack(anchor="w", padx=15, pady=(2, 10))
-        
-        self.btn_rationalize = ctk.CTkButton(f_card, text="Rationalize", fg_color="#009688", hover_color="#00796B", command=self.rationalize_mine)
-        self.btn_rationalize.pack(anchor="w", padx=15, pady=(0, 15))
-        
-        # 3. Archive Button (Middle-Top)
+        f_card.pack(side='top', fill="x", padx=20, pady=(15, 0))
+
+        ctk.CTkLabel(f_card, text="Data Mine Summary", font=FONT_TITLE).pack(
+            anchor="w", padx=15, pady=(14, 8)
+        )
+
+        stats = ctk.CTkFrame(f_card, fg_color="transparent")
+        stats.pack(fill="x", padx=15, pady=(0, 10))
+        self.lbl_tot_files = ctk.CTkLabel(stats, text="Total Files Indexed: 0", font=FONT_BODY)
+        self.lbl_tot_files.pack(anchor="w", pady=2)
+        self.lbl_golden = ctk.CTkLabel(stats, text="Total Unique (Golden) Files: 0", font=FONT_BODY)
+        self.lbl_golden.pack(anchor="w", pady=2)
+        self.lbl_storage = ctk.CTkLabel(stats, text="Total Storage Used: 0 B", font=FONT_BODY)
+        self.lbl_storage.pack(anchor="w", pady=2)
+
+        self.btn_rationalize = ctk.CTkButton(
+            f_card, text="Rationalize", fg_color=COLOR_INFO, hover_color=COLOR_INFO_HOVER,
+            text_color=COLOR_ON_INFO, command=self.rationalize_mine,
+            image=self.icons_dark['refresh'], compound="left", height=38, font=FONT_BODY,
+        )
+        self.btn_rationalize.pack(anchor="w", padx=15, pady=(0, 14))
+        Tooltip(self.btn_rationalize, "Recompute which copy of each file is the 'golden' (kept) version and refresh the summary above.")
+
+        # Archive action card.
+        f_archive = self._section(
+            self.t_datamine, "Bulk archive",
+            hint="Move every non-golden duplicate out to your archive location in one pass.",
+        )
         self.archive_dry_run_var = tk.BooleanVar(value=True)
-        ctk.CTkCheckBox(self.t_datamine, text="Dry Run (Simulation Mode)", variable=self.archive_dry_run_var).pack(side='top', pady=10)
-        
-        btn_archive = ctk.CTkButton(self.t_datamine, text="Launch Bulk Archive (Safety First)", font=("Segoe UI", 14, "bold"), fg_color="#E5A00D", hover_color="#B37D0A", command=self.execute_bulk_archive)
-        btn_archive.pack(side='top', pady=10)
-        
-        # 4. Results (Middle-Fill)
-        ctk.CTkLabel(self.t_datamine, text="Recent Golden Files", font=("Segoe UI", 14, "bold")).pack(side='top', anchor="w", padx=20, pady=(10, 0))
+        archive_dry_cb = ctk.CTkCheckBox(
+            f_archive, text="Dry Run (simulation mode — nothing is moved)",
+            variable=self.archive_dry_run_var, font=FONT_BODY,
+        )
+        archive_dry_cb.pack(anchor="w", pady=(0, 10))
+        Tooltip(archive_dry_cb, "Preview the archive plan without moving any files. Disable only when you're ready to commit.")
+        ctk.CTkButton(
+            f_archive, text="Launch Bulk Archive (Safety First)", font=FONT_HEADER,
+            fg_color=COLOR_CAUTION, hover_color=COLOR_CAUTION_HOVER, command=self.execute_bulk_archive,
+            height=42,
+        ).pack(anchor="w")
+
+        # Recent golden files (fills remaining space).
+        ctk.CTkLabel(self.t_datamine, text="Recent Golden Files", font=FONT_HEADER).pack(
+            side='top', anchor="w", padx=20, pady=(15, 4)
+        )
         self.txt_golden = ctk.CTkTextbox(self.t_datamine)
-        self.txt_golden.pack(side='top', fill="both", expand=True, padx=20, pady=(5, 20))
+        self.txt_golden.pack(side='top', fill="both", expand=True, padx=20, pady=(0, 15))
         self.txt_golden.configure(state="disabled")
-        
+
         self.update_datamine_stats()
 
     def rationalize_mine(self) -> None:
@@ -2096,13 +2537,16 @@ class DedupApp:
                     cur.execute("SELECT COUNT(*) FROM file_index WHERE is_golden = 0 AND full_path LIKE ?", (f"%{folder_name}%",))
                     local_count = cur.fetchone()[0]
                 
-                try:
-                    notary = DedupNotary(self.db_path)
-                    notary_thread = threading.Thread(target=notary.batch_submit_unnotarised, daemon=True)
-                    notary_thread.start()
-                except Exception as e:
-                    import sys
-                    print(f"Failed to initialize notary background thread: {e}", file=sys.stderr)
+                if self.notarise_var.get():
+                    try:
+                        notary = DedupNotary(self.db_path)
+                        notary_thread = threading.Thread(target=notary.batch_submit_unnotarised, daemon=True)
+                        notary_thread.start()
+                    except Exception as e:
+                        import sys
+                        print(f"Failed to initialize notary background thread: {e}", file=sys.stderr)
+                else:
+                    self.log("Notarisation skipped (disabled in audit options).")
 
                 # Weave unique files into the Obsidian knowledge graph and route
                 # anchoring through the cloud gateway. Best-effort and isolated:

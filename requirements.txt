@@ -6,3 +6,6 @@ numpy
 reportlab
 pyinstaller
 requests
+# Optional: only needed to rasterise SVG branding masters (requires system
+# Cairo libraries). Raster (PNG) masters work without it.
+# cairosvg
