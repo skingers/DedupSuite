@@ -10,6 +10,7 @@ import time
 import threading
 import json
 import csv
+import queue
 import tempfile
 import uuid
 import platform
@@ -123,6 +124,17 @@ class DatabaseManager:
         self.db_path = os.path.join(base_path, db_name)
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.execute("PRAGMA foreign_keys = ON;")
+        # busy_timeout first so any residual contention waits politely instead
+        # of raising "database is locked".
+        self.conn.execute("PRAGMA busy_timeout = 30000;")
+        # WAL lets the GUI thread keep reading (stats, etc.) while a worker
+        # thread on its own connection writes — eliminating the lock contention
+        # that froze the UI during Rationalise. Switching journal mode needs an
+        # uncontended lock; degrade gracefully if another connection holds it.
+        try:
+            self.conn.execute("PRAGMA journal_mode = WAL;")
+        except sqlite3.OperationalError:
+            pass
         self._create_tables()
         ensure_blockchain_schema(self.db_path)
 
@@ -249,6 +261,81 @@ class DatabaseManager:
                 legacy_count = cur.fetchone()[0]
             
             return {"golden": golden_count, "legacy": legacy_count}
+
+    @staticmethod
+    def classify_golden_versions(
+        conn: sqlite3.Connection,
+        progress: Optional[Callable[[int, int], None]] = None,
+        batch_size: int = 1000,
+    ) -> Dict[str, int]:
+        """Classify golden vs. legacy files on a *caller-supplied* connection.
+
+        Intended to be run from a worker thread that owns its own dedicated
+        ``sqlite3`` connection (never the GUI thread's shared one). The work is
+        chunked per duplicate-hash group and committed in batches so the caller
+        can yield control between batches via ``progress``.
+
+        Semantics are identical to :meth:`identify_golden_versions` with no
+        ``session_id``: for each ``sha256_hash`` the lowest-``rowid`` row is the
+        golden master and every other row sharing that hash is marked legacy.
+
+        Args:
+            conn: A dedicated SQLite connection owned by the calling thread.
+            progress: Optional ``progress(done, total)`` callback invoked after
+                each committed batch (used for buffered logging / yielding).
+            batch_size: Number of duplicate groups per committed batch.
+
+        Returns:
+            Mapping with ``"golden"`` and ``"legacy"`` counts.
+        """
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(file_index)")
+        columns = [info[1] for info in cur.fetchall()]
+        if 'is_golden' not in columns:
+            conn.execute("ALTER TABLE file_index ADD COLUMN is_golden INTEGER DEFAULT 0")
+            conn.commit()
+
+        # Everything is golden by default; duplicates are demoted below.
+        conn.execute("UPDATE file_index SET is_golden = 1")
+        conn.commit()
+
+        cur.execute('''
+            SELECT sha256_hash, MIN(rowid)
+            FROM file_index
+            WHERE sha256_hash IS NOT NULL
+            GROUP BY sha256_hash
+            HAVING COUNT(*) > 1
+        ''')
+        dup_groups = cur.fetchall()
+        total = len(dup_groups)
+
+        pending = 0
+        for index, (file_hash, keep_rowid) in enumerate(dup_groups):
+            conn.execute(
+                "UPDATE file_index SET is_golden = 0 "
+                "WHERE sha256_hash = ? AND rowid != ?",
+                (file_hash, keep_rowid),
+            )
+            pending += 1
+            if pending >= batch_size:
+                conn.commit()
+                pending = 0
+                if progress is not None:
+                    progress(index + 1, total)
+                # Yield the GIL so the main thread stays responsive.
+                time.sleep(0.01)
+        conn.commit()
+        if progress is not None and total:
+            progress(total, total)
+
+        cur.execute("SELECT COUNT(*) FROM file_index WHERE is_golden = 1")
+        golden_count = cur.fetchone()[0]
+        cur.execute(
+            "SELECT COUNT(*) FROM file_index "
+            "WHERE is_golden = 0 AND sha256_hash IS NOT NULL"
+        )
+        legacy_count = cur.fetchone()[0]
+        return {"golden": golden_count, "legacy": legacy_count}
 
     def get_mine_stats(self) -> Dict[str, int]:
         with self.conn:
@@ -1681,6 +1768,11 @@ class DedupApp:
         self._init_datamine_tab()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
+        # Thread-safe log buffer drained onto the widget every 100ms on the
+        # main thread. Worker threads enqueue lines (never touch the widget).
+        self._log_queue: "queue.Queue[str]" = queue.Queue()
+        self.root.after(100, self._process_log_queue)
+
     def _center_window(self, width, height):
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
@@ -1879,6 +1971,33 @@ class DedupApp:
 
     def _log_ui(self, msg):
         self.log_area.insert(tk.END, msg + "\n"); self.log_area.see(tk.END)
+
+    def _enqueue_log(self, msg: str) -> None:
+        """Thread-safe: buffer a log line for the main-thread drainer.
+
+        Safe to call from any worker thread; the message is appended to the
+        GUI only by :meth:`_process_log_queue`.
+        """
+        self._log_queue.put(msg)
+
+    def _process_log_queue(self) -> None:
+        """Drain buffered log lines onto the widget; reschedules every 100ms.
+
+        Runs exclusively on the Tkinter main thread, batching all pending
+        messages into a single widget update to avoid per-message churn.
+        """
+        try:
+            lines: List[str] = []
+            while True:
+                try:
+                    lines.append(self._log_queue.get_nowait())
+                except queue.Empty:
+                    break
+            if lines:
+                self.log_area.insert(tk.END, "\n".join(lines) + "\n")
+                self.log_area.see(tk.END)
+        finally:
+            self.root.after(100, self._process_log_queue)
 
     def clear_log(self):
         self.log_area.delete(1.0, tk.END)
@@ -2330,14 +2449,32 @@ class DedupApp:
         )
         self._set_header_status(indicator)
         self._toast("Rationalisation initiated: Task running in background.")
-        self.log("Rationalisation initiated: Task running in background.")
+        self._enqueue_log("Rationalisation initiated: Task running in background.")
+
+        # Capture an immutable copy of the path; the worker shares no mutable
+        # state with the main thread beyond the thread-safe log queue.
+        db_path = self.db_path
 
         def worker() -> None:
+            conn: Optional[sqlite3.Connection] = None
             try:
-                self.db_manager.identify_golden_versions()
+                # Dedicated, thread-local connection — never the GUI's shared one.
+                conn = sqlite3.connect(db_path, timeout=30)
+                conn.execute("PRAGMA foreign_keys = ON;")
+                conn.execute("PRAGMA busy_timeout = 30000;")
+
+                def progress(done: int, total: int) -> None:
+                    self._enqueue_log(
+                        f"Rationalising… classified {done:,}/{total:,} duplicate groups"
+                    )
+
+                DatabaseManager.classify_golden_versions(conn, progress=progress)
             except Exception as exc:
                 self.root.after(0, lambda e=exc: self._finish_rationalize(error=e))
                 return
+            finally:
+                if conn is not None:
+                    conn.close()
             self.root.after(0, self._finish_rationalize)
 
         threading.Thread(target=worker, daemon=True).start()
