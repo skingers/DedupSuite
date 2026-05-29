@@ -15,6 +15,16 @@ class DedupNotary:
             ``file_index`` and ``blockchain_proofs`` tables.
     """
 
+    #: Public OpenTimestamps calendar pool used to aggregate proofs.
+    CALENDAR_URLS = (
+        "https://a.pool.opentimestamps.org",
+        "https://b.pool.opentimestamps.org",
+        "https://a.pool.eternitywall.com",
+        "https://ots.btc.catallaxy.com",
+    )
+    #: Per-calendar network timeout, in seconds.
+    CALENDAR_TIMEOUT = 10
+
     def __init__(self, db_path: str) -> None:
         """Initialise the notary.
 
@@ -58,18 +68,51 @@ class DedupNotary:
                 return
 
             try:
-                import opentimestamps
-                import opentimestamps.timestamp as ots_timestamp
-            except Exception as exc:  # pragma: no cover - depends on runtime install state
+                from opentimestamps.core.op import OpSHA256
+                from opentimestamps.core.timestamp import Timestamp, DetachedTimestampFile
+                from opentimestamps.core.serialize import BytesSerializationContext
+                from opentimestamps.calendar import RemoteCalendar
+            except ImportError as exc:  # pragma: no cover - depends on runtime install state
                 print(f"[NOTARY] OpenTimestamps import failed: {exc}", file=sys.stderr)
                 return
+
+            def _build_proof(hash_bytes: bytes) -> bytes:
+                """Stamp a pre-computed SHA-256 digest and return the OTS proof.
+
+                Builds a detached timestamp from the raw 32-byte digest, submits
+                it to the public calendar pool (merging every successful reply),
+                and serialises the resulting proof. Raises if no calendar accepts
+                the timestamp so the caller can keep the hash ``PENDING``.
+                """
+                detached = DetachedTimestampFile(OpSHA256(), Timestamp(hash_bytes))
+                submitted = False
+                for url in self.CALENDAR_URLS:
+                    try:
+                        calendar = RemoteCalendar(url)
+                        calendar_timestamp = calendar.submit(
+                            detached.timestamp.msg, timeout=self.CALENDAR_TIMEOUT
+                        )
+                        detached.timestamp.merge(calendar_timestamp)
+                        submitted = True
+                    except Exception as cal_exc:
+                        print(f"[NOTARY] Calendar {url} unavailable: {cal_exc}", file=sys.stderr)
+                        continue
+                if not submitted:
+                    raise RuntimeError("no calendar accepted the timestamp")
+                ctx = BytesSerializationContext()
+                detached.serialize(ctx)
+                return ctx.getbytes()
 
             for file_hash in target_hashes:
                 try:
                     hash_bytes = bytes.fromhex(file_hash)
-                    timestamp = ots_timestamp.Timestamp.from_hash(hash_bytes)
-                    opentimestamps.create_timestamp(timestamp, open_services=True)
-                    proof_blob = timestamp.serialize()
+                    proof_blob = _build_proof(hash_bytes)
+
+                    # Never persist a blank proof under a 'SUBMITTED' status; an
+                    # empty serialisation means the timestamp carries no calendar
+                    # attestations and would be useless for later verification.
+                    if not proof_blob:
+                        raise ValueError("empty OpenTimestamps proof; refusing to persist")
 
                     with conn:
                         conn.execute(

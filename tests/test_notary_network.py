@@ -69,37 +69,76 @@ def _proof_status(path: Path, file_hash: str) -> str | None:
 
 @pytest.fixture()
 def fake_opentimestamps(monkeypatch: pytest.MonkeyPatch) -> Callable[[Callable], None]:
-    """Install a fake ``opentimestamps`` package; returns a behaviour setter.
+    """Install a fake ``opentimestamps`` package mirroring the real API surface.
 
-    The behaviour callable receives the raw hash bytes and may raise to
-    simulate an unreachable calendar / network timeout.
+    Mocks ``opentimestamps.core.op.OpSHA256``,
+    ``opentimestamps.core.timestamp.{Timestamp,DetachedTimestampFile}``,
+    ``opentimestamps.core.serialize.BytesSerializationContext`` and
+    ``opentimestamps.calendar.RemoteCalendar``. Returns a setter for the
+    calendar-submit behaviour; the behaviour callable receives the raw digest
+    bytes and may raise to simulate an unreachable calendar / network timeout.
     """
+    import sys
 
     def _set_behaviour(behaviour: Callable[[bytes], None]) -> None:
+        class _OpSHA256:
+            DIGEST_LENGTH = 32
+
         class _Timestamp:
-            def __init__(self, hash_bytes: bytes) -> None:
-                self.hash_bytes = hash_bytes
+            def __init__(self, msg: bytes) -> None:
+                self.msg = msg
 
-            @classmethod
-            def from_hash(cls, hash_bytes: bytes) -> "_Timestamp":
-                return cls(hash_bytes)
+            def merge(self, other: "_Timestamp") -> None:
+                # Real Timestamp merges calendar attestations; no-op for tests.
+                pass
 
-            def serialize(self) -> bytes:
-                return b"OTS:" + self.hash_bytes
+        class _DetachedTimestampFile:
+            def __init__(self, file_hash_op, timestamp: _Timestamp) -> None:
+                self.file_hash_op = file_hash_op
+                self.timestamp = timestamp
 
-        ts_module = types.ModuleType("opentimestamps.timestamp")
+            def serialize(self, ctx) -> None:
+                ctx.write_bytes(b"OTS:" + self.timestamp.msg)
+
+        class _BytesSerializationContext:
+            def __init__(self) -> None:
+                self._buf = bytearray()
+
+            def write_bytes(self, data: bytes) -> None:
+                self._buf.extend(data)
+
+            def getbytes(self) -> bytes:
+                return bytes(self._buf)
+
+        class _RemoteCalendar:
+            def __init__(self, url: str) -> None:
+                self.url = url
+
+            def submit(self, digest: bytes, timeout=None) -> _Timestamp:
+                behaviour(digest)  # may raise to simulate an unreachable calendar
+                return _Timestamp(digest)
+
+        op_module = types.ModuleType("opentimestamps.core.op")
+        op_module.OpSHA256 = _OpSHA256
+        ts_module = types.ModuleType("opentimestamps.core.timestamp")
         ts_module.Timestamp = _Timestamp
-
+        ts_module.DetachedTimestampFile = _DetachedTimestampFile
+        serialize_module = types.ModuleType("opentimestamps.core.serialize")
+        serialize_module.BytesSerializationContext = _BytesSerializationContext
+        calendar_module = types.ModuleType("opentimestamps.calendar")
+        calendar_module.RemoteCalendar = _RemoteCalendar
+        core_module = types.ModuleType("opentimestamps.core")
         ots_module = types.ModuleType("opentimestamps")
 
-        def create_timestamp(timestamp, open_services: bool = True) -> None:
-            behaviour(timestamp.hash_bytes)
-
-        ots_module.create_timestamp = create_timestamp
-        ots_module.timestamp = ts_module
-
-        monkeypatch.setitem(__import__("sys").modules, "opentimestamps", ots_module)
-        monkeypatch.setitem(__import__("sys").modules, "opentimestamps.timestamp", ts_module)
+        for name, module in {
+            "opentimestamps": ots_module,
+            "opentimestamps.core": core_module,
+            "opentimestamps.core.op": op_module,
+            "opentimestamps.core.timestamp": ts_module,
+            "opentimestamps.core.serialize": serialize_module,
+            "opentimestamps.calendar": calendar_module,
+        }.items():
+            monkeypatch.setitem(sys.modules, name, module)
 
     return _set_behaviour
 
@@ -136,6 +175,29 @@ def test_proof_blob_is_persisted(tmp_path: Path, fake_opentimestamps) -> None:
     assert bytes(blob) == b"OTS:" + bytes.fromhex(VALID_HASH_A)
 
 
+def test_each_blob_is_paired_with_its_own_hash(tmp_path: Path, fake_opentimestamps) -> None:
+    """Every persisted proof must belong to the hash it was generated from."""
+    db = tmp_path / "mine.db"
+    _build_db(db, [VALID_HASH_A, VALID_HASH_B])
+    fake_opentimestamps(lambda hb: None)
+
+    DedupNotary(str(db)).batch_submit_unnotarised()
+
+    conn = sqlite3.connect(str(db))
+    try:
+        rows = conn.execute(
+            "SELECT file_hash, ots_proof_blob FROM blockchain_proofs"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    stored = {file_hash: bytes(blob) for file_hash, blob in rows}
+    assert stored == {
+        VALID_HASH_A: b"OTS:" + bytes.fromhex(VALID_HASH_A),
+        VALID_HASH_B: b"OTS:" + bytes.fromhex(VALID_HASH_B),
+    }
+
+
 def test_batch_survives_unreachable_server_timeout(tmp_path: Path, fake_opentimestamps) -> None:
     """A timeout on one hash must not crash the batch or mark it submitted."""
     db = tmp_path / "mine.db"
@@ -162,7 +224,7 @@ def test_no_targets_exits_cleanly(tmp_path: Path, fake_opentimestamps) -> None:
     _seed_proof(db, VALID_HASH_A, "SUBMITTED")
 
     def behaviour(hash_bytes: bytes) -> None:  # pragma: no cover - must never run
-        raise AssertionError("create_timestamp should not be called")
+        raise AssertionError("calendar submit should not be called")
 
     fake_opentimestamps(behaviour)
     DedupNotary(str(db)).batch_submit_unnotarised()  # nothing to do, no error
