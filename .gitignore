@@ -10,6 +10,8 @@ settings.json
 build/
 dist/
 *.spec
+# The canonical build spec is a tracked deliverable.
+!dedup_suite.spec
 
 # --- Project Clutter & Legacy Directories ---
 _archive_pre_v2/

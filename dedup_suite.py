@@ -1791,6 +1791,18 @@ class DedupApp:
             return getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
         return os.path.dirname(os.path.abspath(__file__))
 
+    def _runtime_base(self) -> str:
+        """Return the directory for *writable* runtime state.
+
+        Unlike :meth:`_asset_base` (read-only bundle, ``sys._MEIPASS`` when
+        frozen), this resolves next to the executable when frozen so the
+        database and any exported logs live alongside the binary rather than in
+        the ephemeral one-file extraction directory.
+        """
+        if getattr(sys, 'frozen', False):
+            return os.path.dirname(sys.executable)
+        return os.path.dirname(os.path.abspath(__file__))
+
     def _resolve_brand_source(self, *names: str) -> Optional[str]:
         """Return the first existing branding source from ``assets/``.
 
@@ -2012,9 +2024,17 @@ class DedupApp:
         error is surfaced via a message box.
         """
         default_name = f"{time.strftime('%Y-%m-%d')}_DedupSuite_Log.txt"
+        # Default to a "logs" folder next to the app/executable for predictable,
+        # path-relative archival (created lazily only if the user saves there).
+        initial_dir = os.path.join(self._runtime_base(), "logs")
+        try:
+            os.makedirs(initial_dir, exist_ok=True)
+        except OSError:
+            initial_dir = self._runtime_base()
         path = filedialog.asksaveasfilename(
             title="Save Activity Log",
             defaultextension=".txt",
+            initialdir=initial_dir,
             initialfile=default_name,
             filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")],
         )
