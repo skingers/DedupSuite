@@ -1746,8 +1746,8 @@ class DedupApp:
         self.lbl_storage = ctk.CTkLabel(f_card, text="Total Storage Used: 0 B")
         self.lbl_storage.pack(anchor="w", padx=15, pady=(2, 10))
         
-        btn_rationalize = ctk.CTkButton(f_card, text="Rationalize", fg_color="#009688", hover_color="#00796B", command=self.rationalize_mine)
-        btn_rationalize.pack(anchor="w", padx=15, pady=(0, 15))
+        self.btn_rationalize = ctk.CTkButton(f_card, text="Rationalize", fg_color="#009688", hover_color="#00796B", command=self.rationalize_mine)
+        self.btn_rationalize.pack(anchor="w", padx=15, pady=(0, 15))
         
         # 3. Archive Button (Middle-Top)
         self.archive_dry_run_var = tk.BooleanVar(value=True)
@@ -1764,8 +1764,40 @@ class DedupApp:
         
         self.update_datamine_stats()
 
-    def rationalize_mine(self):
-        self.db_manager.identify_golden_versions()
+    def rationalize_mine(self) -> None:
+        """Recompute golden/legacy classification without blocking the UI.
+
+        The ``identify_golden_versions`` pass is expensive on large indexes
+        (tens of thousands of files) and previously ran on the Tkinter main
+        thread, freezing the window ("Not Responding"). It now runs in a daemon
+        thread; all widget updates are marshalled back to the main thread via
+        ``root.after`` to respect Tkinter's single-threaded contract.
+        """
+        # Already on the main thread here (button callback): safe to touch widgets.
+        self.btn_rationalize.configure(state="disabled", text="Processing...")
+        self.log("Rationalizing data mine... this may take a moment.")
+
+        def worker() -> None:
+            try:
+                self.db_manager.identify_golden_versions()
+            except Exception as exc:
+                self.root.after(0, lambda e=exc: self._finish_rationalize(error=e))
+                return
+            self.root.after(0, self._finish_rationalize)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_rationalize(self, error: Optional[Exception] = None) -> None:
+        """Re-enable the button and refresh stats on the main thread.
+
+        Args:
+            error: Exception raised by the background pass, if any.
+        """
+        self.btn_rationalize.configure(state="normal", text="Rationalize")
+        if error is not None:
+            self.log(f"Rationalization failed: {error}")
+            messagebox.showerror("Rationalize", f"Rationalization failed: {error}")
+            return
         self.update_datamine_stats()
         self.log("Rationalization complete. Data Mine Summary updated.")
 
