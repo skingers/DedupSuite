@@ -1646,10 +1646,6 @@ COLOR_NEUTRAL_HOVER = "#393C3E"
 COLOR_HINT = "#9A9A9A"
 BRAND_BLACK = "#0B0B0D"
 
-# Activity logs are captured automatically (no manual file picker) under this
-# directory, named ``YYYY-MM-DD_[Context]_Log.txt``.
-LOG_DIR = "logs"
-
 FONT_TITLE = ("Segoe UI", 20, "bold")
 FONT_HEADER = ("Segoe UI", 15, "bold")
 FONT_BODY = ("Segoe UI", 12)
@@ -2008,8 +2004,24 @@ class DedupApp:
         self.log_area.delete(1.0, tk.END)
 
     def save_log(self):
-        """Capture the activity log on demand (the only path that writes a log)."""
-        self._capture_log("Manual")
+        """Open a 'Save As' dialog and write the activity log to the chosen file."""
+        default_name = f"{time.strftime('%Y-%m-%d')}_DedupSuite_Log.txt"
+        path = filedialog.asksaveasfilename(
+            title="Save Activity Log",
+            defaultextension=".txt",
+            initialfile=default_name,
+            filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(self.log_area.get(1.0, tk.END))
+            self.log(f"Log saved: {path}")
+            self._toast(f"Log saved: {os.path.basename(path)}", kind="success")
+        except OSError as exc:
+            traceback.print_exc()
+            messagebox.showerror("Save Log", f"Could not save log:\n{exc}")
 
     @staticmethod
     def _human_size(num_bytes: float) -> str:
@@ -2078,49 +2090,6 @@ class DedupApp:
             "This runs in the background — you remain free to use DedupSuite "
             "while it works.",
         )
-
-    def _capture_log(self, context_name: str) -> Optional[str]:
-        """Write the activity log to ``logs/`` with a smart, dated filename.
-
-        Replaces the old manual save dialog. The file is named
-        ``YYYY-MM-DD_[ContextName]_Log.txt`` and a non-blocking toast confirms
-        capture.
-
-        Args:
-            context_name: Caller-supplied context (e.g. ``"Audit"``,
-                ``"BulkArchive"``, ``"Rationalise"``).
-
-        Returns:
-            The path written, or ``None`` on failure.
-        """
-        # Broad guard: anything raised here (OSError, TclError from the toast/
-        # widget, etc.) must not escape into the Tk callback and silently abort
-        # the click. The full trace is printed to stderr for diagnosis.
-        try:
-            log_dir = os.path.join(os.path.dirname(self.db_path), LOG_DIR)
-            os.makedirs(log_dir, exist_ok=True)
-            filename = f"{time.strftime('%Y-%m-%d')}_{context_name}_Log.txt"
-            path = os.path.join(log_dir, filename)
-            # Snapshot the widget contents up-front so a later toast/UI error
-            # cannot prevent the file from being written.
-            contents = self.log_area.get(1.0, tk.END)
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write(contents)
-            # Persistent, always-visible confirmation in the Activity Log itself
-            # (the transient toast alone is easy to miss / invisible w/o a
-            # console), plus the bottom-right toast for immediacy.
-            self.log(f"Log captured: {path}")
-            self._toast(f"Log captured: {filename}", kind="success")
-            return path
-        except Exception as exc:
-            traceback.print_exc()
-            self.log(f"Log capture failed: {exc}")
-            # Surface the error visibly even when launched without a console.
-            try:
-                messagebox.showerror("Save Log", f"Could not capture log:\n{exc}")
-            except tk.TclError:
-                pass
-            return None
 
     def progress(self, cur, tot, msg=""):
         self.root.after(0, lambda: self._progress_ui(cur, tot, msg))
