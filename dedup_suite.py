@@ -2496,7 +2496,6 @@ class DedupApp:
             return
         self.update_datamine_stats()
         self.log("Rationalisation complete. Data Mine Summary updated.")
-        self._capture_log("Rationalise")
 
     def update_datamine_stats(self):
         stats = self.db_manager.get_mine_stats()
@@ -2664,7 +2663,7 @@ class DedupApp:
                     else: subprocess.call(['xdg-open', str(report_path)])
                 except: pass
             
-            self.root.after(0, lambda m=msg: [archive_win.destroy(), messagebox.showinfo("Archive Complete", m), self.update_datamine_stats(), self._capture_log("BulkArchive")])
+            self.root.after(0, lambda m=msg: [archive_win.destroy(), messagebox.showinfo("Archive Complete", m), self.update_datamine_stats()])
         threading.Thread(target=archive_task, daemon=True).start()
 
     def revert_last_archive(self):
@@ -2823,7 +2822,6 @@ class DedupApp:
                 self.log(f"Error during scan: {e}")
             finally:
                 self.root.after(0, self.reset_scan_buttons)
-                self.root.after(0, lambda: self._capture_log("Audit"))
         threading.Thread(target=run, daemon=True).start()
 
     def export_knowledge_graph(self, session_id: str, source_path: str) -> None:
