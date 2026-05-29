@@ -2101,13 +2101,25 @@ class DedupApp:
             os.makedirs(log_dir, exist_ok=True)
             filename = f"{time.strftime('%Y-%m-%d')}_{context_name}_Log.txt"
             path = os.path.join(log_dir, filename)
+            # Snapshot the widget contents up-front so a later toast/UI error
+            # cannot prevent the file from being written.
+            contents = self.log_area.get(1.0, tk.END)
             with open(path, "w", encoding="utf-8") as handle:
-                handle.write(self.log_area.get(1.0, tk.END))
+                handle.write(contents)
+            # Persistent, always-visible confirmation in the Activity Log itself
+            # (the transient toast alone is easy to miss / invisible w/o a
+            # console), plus the bottom-right toast for immediacy.
+            self.log(f"Log captured: {path}")
             self._toast(f"Log captured: {filename}", kind="success")
             return path
         except Exception as exc:
             traceback.print_exc()
             self.log(f"Log capture failed: {exc}")
+            # Surface the error visibly even when launched without a console.
+            try:
+                messagebox.showerror("Save Log", f"Could not capture log:\n{exc}")
+            except tk.TclError:
+                pass
             return None
 
     def progress(self, cur, tot, msg=""):
@@ -2446,17 +2458,11 @@ class DedupApp:
         thread; all widget updates are marshalled back to the main thread via
         ``root.after`` to respect Tkinter's single-threaded contract.
         """
-        # Already on the main thread here (button callback): safe to touch widgets.
+        # Already on the main thread here (button callback): keep this path free
+        # of ALL database access so the click returns instantly. Even reading
+        # stats (size for the indicator) is deferred to the worker thread.
         self.btn_rationalize.configure(state="disabled", text="Rationalising…")
-        try:
-            size = self._human_size(self.db_manager.get_mine_stats().get('total_storage', 0))
-        except Exception:
-            size = ""
-        indicator = (
-            f"Rationalising {size} of data in the background…" if size
-            else "Rationalising in the background…"
-        )
-        self._set_header_status(indicator)
+        self._set_header_status("Rationalising in the background…")
         self._toast("Rationalisation initiated: Task running in background.")
         self._enqueue_log("Rationalisation initiated: Task running in background.")
 
@@ -2471,6 +2477,16 @@ class DedupApp:
                 conn = sqlite3.connect(db_path, timeout=30)
                 conn.execute("PRAGMA foreign_keys = ON;")
                 conn.execute("PRAGMA busy_timeout = 30000;")
+
+                # Compute the header size indicator off the main thread.
+                try:
+                    row = conn.execute("SELECT SUM(file_size) FROM file_index").fetchone()
+                    size = self._human_size((row[0] if row else 0) or 0)
+                    self.root.after(0, lambda s=size: self._set_header_status(
+                        f"Rationalising {s} of data in the background…"
+                    ))
+                except sqlite3.Error:
+                    pass
 
                 def progress(done: int, total: int) -> None:
                     self._enqueue_log(
