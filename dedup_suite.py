@@ -2004,7 +2004,13 @@ class DedupApp:
         self.log_area.delete(1.0, tk.END)
 
     def save_log(self):
-        """Open a 'Save As' dialog and write the activity log to the chosen file."""
+        """Archive the activity log to a user-chosen file.
+
+        Opens a native "Save As" file dialog (pre-filled with a dated default
+        name) so the user can manually archive the current Activity Log to any
+        location. Writing is skipped if the dialog is cancelled, and any I/O
+        error is surfaced via a message box.
+        """
         default_name = f"{time.strftime('%Y-%m-%d')}_DedupSuite_Log.txt"
         path = filedialog.asksaveasfilename(
             title="Save Activity Log",
