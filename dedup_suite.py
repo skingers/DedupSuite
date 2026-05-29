@@ -12,6 +12,7 @@ import json
 import csv
 import queue
 import tempfile
+import traceback
 import uuid
 import platform
 import subprocess
@@ -1754,7 +1755,11 @@ class DedupApp:
         f_log.pack(fill="x", padx=20, pady=(10, 5))
         ctk.CTkLabel(f_log, text="Activity Log:").pack(side="left", padx=5)
         ctk.CTkButton(f_log, text="Clear Log", image=self.icons['trash'], compound="left", fg_color="gray", command=self.clear_log, width=100).pack(side="right")
-        ctk.CTkButton(f_log, text="Save Log", image=self.icons['save'], compound="left", fg_color="gray", command=self.save_log, width=100).pack(side="right", padx=10)
+        self.btn_save_log = ctk.CTkButton(
+            f_log, text="Save Log", image=self.icons['save'], compound="left",
+            fg_color="gray", command=self.save_log, width=100,
+        )
+        self.btn_save_log.pack(side="right", padx=10)
         
         self.log_area = ctk.CTkTextbox(self.root, height=150)
         self.log_area.pack(fill="x", padx=20, pady=(0, 10))
@@ -2003,7 +2008,7 @@ class DedupApp:
         self.log_area.delete(1.0, tk.END)
 
     def save_log(self):
-        """Capture the activity log automatically (no manual file picker)."""
+        """Capture the activity log on demand (the only path that writes a log)."""
         self._capture_log("Manual")
 
     @staticmethod
@@ -2088,6 +2093,9 @@ class DedupApp:
         Returns:
             The path written, or ``None`` on failure.
         """
+        # Broad guard: anything raised here (OSError, TclError from the toast/
+        # widget, etc.) must not escape into the Tk callback and silently abort
+        # the click. The full trace is printed to stderr for diagnosis.
         try:
             log_dir = os.path.join(os.path.dirname(self.db_path), LOG_DIR)
             os.makedirs(log_dir, exist_ok=True)
@@ -2097,7 +2105,8 @@ class DedupApp:
                 handle.write(self.log_area.get(1.0, tk.END))
             self._toast(f"Log captured: {filename}", kind="success")
             return path
-        except OSError as exc:
+        except Exception as exc:
+            traceback.print_exc()
             self.log(f"Log capture failed: {exc}")
             return None
 
