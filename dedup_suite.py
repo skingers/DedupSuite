@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 import sqlite3
@@ -151,6 +152,27 @@ class DatabaseManager:
                 self.conn.execute("ALTER TABLE file_index ADD COLUMN last_session_id TEXT")
             except sqlite3.OperationalError:
                 pass
+
+    def register_device(self, device_id: str, device_name: Optional[str] = None) -> None:
+        """Ensure a row exists in ``devices`` for ``device_id``.
+
+        ``file_index.device_id`` carries an enforced foreign key to
+        ``devices(device_id)``; indexing a file therefore requires its device
+        to be registered first. Uses ``INSERT OR IGNORE`` so repeated calls are
+        idempotent.
+
+        Args:
+            device_id: Stable identifier for the volume being scanned.
+            device_name: Human-readable label (defaults to the identifier).
+        """
+        if not device_id:
+            return
+        with self.conn:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO devices (device_id, device_name, last_seen) "
+                "VALUES (?, ?, CURRENT_TIMESTAMP)",
+                (device_id, device_name or device_id),
+            )
 
     def index_file(self, data: Dict[str, Any]) -> None:
         """Insert or replace a file row using bound named parameters (SQL-injection safe)."""
@@ -474,6 +496,13 @@ class FileAuditor:
         self.db_manager = db_manager
         self.session_id = session_id
         self.device_id = get_drive_id(self.root_path)
+        # AUDIT-REVIEW: Register the device up front so the enforced
+        # file_index.device_id -> devices FK resolves during indexing.
+        if self.db_manager and self.device_id:
+            try:
+                self.db_manager.register_device(self.device_id, platform.node())
+            except Exception as exc:
+                self.log(f"Device registration failed: {exc}")
         self.files_scanned = 0
         self.duplicates_found = 0
         self.bytes_saved = 0
@@ -2075,66 +2104,16 @@ class DedupApp:
     def export_knowledge_graph(self, session_id: str, source_path: str) -> None:
         """Export this session's unique files to Obsidian and cloud-anchor them.
 
-        Reads the golden (unique) file rows for ``session_id`` from the ledger,
-        renders an Obsidian knowledge graph via :class:`MarkdownTranslator`, and
-        best-effort anchors each hash through :class:`CloudNotaryBridge`. All
-        failures are logged and contained so the GUI is never disrupted.
+        Thin GUI wrapper that delegates to :func:`export_knowledge_graph_core`
+        so the same logic is shared with the headless CLI entry point.
 
         Args:
             session_id: The audit session whose golden files should be exported.
             source_path: The scanned source directory (export is written here).
         """
-        try:
-            with self.db_manager.conn:
-                cur = self.db_manager.conn.cursor()
-                cur.execute(
-                    """
-                    SELECT full_path, sha256_hash
-                    FROM file_index
-                    WHERE is_golden = 1
-                      AND sha256_hash IS NOT NULL
-                      AND last_session_id = ?
-                    """,
-                    (session_id,),
-                )
-                rows = cur.fetchall()
-
-            if not rows:
-                self.log("Knowledge graph: no unique files for this session.")
-                return
-
-            records = [
-                UniqueFileRecord(path=Path(full_path), file_hash=sha256_hash)
-                for full_path, sha256_hash in rows
-            ]
-
-            export_root = source_path if source_path and os.path.isdir(source_path) else os.path.dirname(self.db_path)
-            translator = MarkdownTranslator(export_root)
-            result = translator.translate(records)
-            self.log(
-                f"Knowledge graph: wrote {len(result.note_paths)} notes and "
-                f"{len(result.index_paths)} folder indexes to {result.export_dir}."
-            )
-
-            bridge = CloudNotaryBridge(logger=self.log)
-            anchored = 0
-            for record in records:
-                outcome = bridge.anchor(record.file_hash)
-                if outcome.ok:
-                    anchored += 1
-                    with self.db_manager.conn:
-                        self.db_manager.conn.execute(
-                            """
-                            INSERT INTO blockchain_proofs (file_hash, status, updated_at)
-                            VALUES (?, 'SUBMITTED', CURRENT_TIMESTAMP)
-                            ON CONFLICT(file_hash) DO UPDATE SET
-                                status = 'SUBMITTED', updated_at = CURRENT_TIMESTAMP
-                            """,
-                            (record.file_hash,),
-                        )
-            self.log(f"Cloud notary: anchored {anchored}/{len(records)} hashes via gateway.")
-        except Exception as e:
-            self.log(f"Knowledge graph export failed: {e}")
+        export_knowledge_graph_core(
+            self.db_manager, self.db_path, session_id, source_path, log=self.log
+        )
 
     def _show_review(self, groups, total, hash_cache):
         self.review_dialog = ReviewDialog(self.root, groups, total, self.db_manager, self.mode_var.get(), precomputed_hashes=hash_cache, 
@@ -2228,6 +2207,218 @@ class DedupApp:
             self.ignore_folders_var.set(self.settings['ignore_folders'])
             messagebox.showinfo("Settings", "Settings reset to defaults. Click 'Save Settings' to persist changes.")
 
+def export_knowledge_graph_core(
+    db_manager: DatabaseManager,
+    db_path: str,
+    session_id: str,
+    source_path: str,
+    log: Callable[[str], None] = print,
+) -> None:
+    """Render this session's unique files to Obsidian and cloud-anchor them.
+
+    Reads the golden (unique) file rows for ``session_id`` from the ledger,
+    renders an Obsidian knowledge graph via :class:`MarkdownTranslator`, and
+    best-effort anchors each hash through :class:`CloudNotaryBridge`. All
+    failures are logged and contained so neither the GUI nor a headless run is
+    aborted by a network or filesystem error.
+
+    Args:
+        db_manager: Open ledger connection wrapper.
+        db_path: Path to the SQLite database (used as a fallback export root).
+        session_id: The audit session whose golden files should be exported.
+        source_path: The scanned source directory (export is written here).
+        log: Callable used to surface human-readable progress messages.
+    """
+    try:
+        with db_manager.conn:
+            cur = db_manager.conn.cursor()
+            cur.execute(
+                """
+                SELECT full_path, sha256_hash
+                FROM file_index
+                WHERE is_golden = 1
+                  AND sha256_hash IS NOT NULL
+                  AND last_session_id = ?
+                """,
+                (session_id,),
+            )
+            rows = cur.fetchall()
+
+        if not rows:
+            log("Knowledge graph: no unique files for this session.")
+            return
+
+        records = [
+            UniqueFileRecord(path=Path(full_path), file_hash=sha256_hash)
+            for full_path, sha256_hash in rows
+        ]
+
+        export_root = source_path if source_path and os.path.isdir(source_path) else os.path.dirname(db_path)
+        translator = MarkdownTranslator(export_root)
+        result = translator.translate(records)
+        log(
+            f"Knowledge graph: wrote {len(result.note_paths)} notes and "
+            f"{len(result.index_paths)} folder indexes to {result.export_dir}."
+        )
+
+        bridge = CloudNotaryBridge(logger=log)
+        anchored = 0
+        for record in records:
+            outcome = bridge.anchor(record.file_hash)
+            if outcome.ok:
+                anchored += 1
+                with db_manager.conn:
+                    db_manager.conn.execute(
+                        """
+                        INSERT INTO blockchain_proofs (file_hash, status, updated_at)
+                        VALUES (?, 'SUBMITTED', CURRENT_TIMESTAMP)
+                        ON CONFLICT(file_hash) DO UPDATE SET
+                            status = 'SUBMITTED', updated_at = CURRENT_TIMESTAMP
+                        """,
+                        (record.file_hash,),
+                    )
+        log(f"Cloud notary: anchored {anchored}/{len(records)} hashes via gateway.")
+    except Exception as e:
+        log(f"Knowledge graph export failed: {e}")
+
+
+def run_headless(args: argparse.Namespace) -> int:
+    """Run a full audit (and optional notarisation/export) without a GUI.
+
+    Intended for invocation by the Obsidian plugin via ``child_process.spawn``.
+    Drives the same core engine as the GUI -- hashing, golden-version
+    identification, OpenTimestamps notarisation, and the Obsidian knowledge
+    graph export -- but synchronously, so the process only exits once all work
+    is complete.
+
+    Args:
+        args: Parsed command-line arguments (see :func:`main`).
+
+    Returns:
+        Process exit code: ``0`` on success, non-zero on a fatal error.
+    """
+    def log(message: str) -> None:
+        print(f"[DEDUP] {message}", flush=True)
+
+    target = os.path.abspath(args.target)
+    if not os.path.isdir(target):
+        print(f"[DEDUP] ERROR: target is not a directory: {target}", file=sys.stderr, flush=True)
+        return 2
+
+    db_manager = DatabaseManager()
+    try:
+        session_id = str(uuid.uuid4())
+        log(f"Headless audit starting on: {target} (session {session_id})")
+
+        ignore_exts = [e.strip() for e in args.ignore_exts.split(",") if e.strip()]
+        ignore_folders = [f.strip() for f in args.ignore_folders.split(",") if f.strip()]
+
+        auditor_cls = VideoFileAuditor if args.mode == "visual" else FileAuditor
+        auditor = auditor_cls(
+            target,
+            log_callback=log,
+            progress_callback=lambda *_: None,
+            review_mode=False,
+            threads=args.threads,
+            ignore_exts=ignore_exts,
+            ignore_folders=ignore_folders,
+            db_manager=db_manager,
+            session_id=session_id,
+        )
+        auditor.run()
+
+        stats = db_manager.identify_golden_versions(session_id=session_id)
+        log(f"Audit complete. Golden/legacy stats: {stats}")
+
+        if args.export:
+            export_knowledge_graph_core(db_manager, db_manager.db_path, session_id, target, log=log)
+        else:
+            log("Knowledge graph export skipped (--no-export).")
+
+        if args.notarise:
+            log("Notarising unanchored hashes via OpenTimestamps...")
+            DedupNotary(db_manager.db_path).batch_submit_unnotarised()
+            log("Notarisation pass complete.")
+        else:
+            log("Notarisation skipped (--no-notarise).")
+
+        log("Headless run finished successfully.")
+        return 0
+    except Exception as exc:
+        print(f"[DEDUP] FATAL: headless run failed: {exc}", file=sys.stderr, flush=True)
+        return 1
+    finally:
+        db_manager.close()
+
+
+def main(argv: Optional[List[str]] = None) -> None:
+    """Entry point: dispatch to headless mode when invoked with arguments.
+
+    With no command-line arguments the standard CustomTkinter GUI is launched.
+    When a target directory (or ``--headless``) is supplied -- as the Obsidian
+    ExecutionEngine does via a background spawn -- the GUI is bypassed and the
+    core engine runs headlessly, exiting with an appropriate status code.
+
+    Args:
+        argv: Optional argument vector (defaults to ``sys.argv[1:]``).
+    """
+    parser = argparse.ArgumentParser(
+        prog="dedup_suite",
+        description="DedupSuite deduplication engine (GUI by default, headless when given a target).",
+    )
+    parser.add_argument(
+        "target",
+        nargs="?",
+        default=None,
+        help="Directory to audit. Supplying this triggers headless (no-GUI) mode.",
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Force headless execution even without a positional target.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["exact", "visual"],
+        default="exact",
+        help="Audit mode: 'exact' (SHA-256) or 'visual' (perceptual/video). Default: exact.",
+    )
+    parser.add_argument(
+        "--threads", type=int, default=4, help="Worker thread count for hashing. Default: 4.",
+    )
+    parser.add_argument(
+        "--ignore-exts", default="", help="Comma-separated file extensions to ignore.",
+    )
+    parser.add_argument(
+        "--ignore-folders", default="", help="Comma-separated folder names to ignore.",
+    )
+    parser.add_argument(
+        "--notarise",
+        "--notarize",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        dest="notarise",
+        help="Run OpenTimestamps notarisation after the audit (default: enabled).",
+    )
+    parser.add_argument(
+        "--export",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Export the Obsidian knowledge graph after the audit (default: enabled).",
+    )
+    args = parser.parse_args(argv)
+
+    headless = args.target is not None or args.headless
+    if not headless:
+        app = DedupApp()
+        app.root.mainloop()
+        return
+
+    if args.target is None:
+        parser.error("--headless requires a target directory to audit.")
+
+    sys.exit(run_headless(args))
+
+
 if __name__ == "__main__":
-    app = DedupApp()
-    app.root.mainloop()
+    main()

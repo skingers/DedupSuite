@@ -283,3 +283,81 @@ def test_schema_does_not_retry_on_non_lock_error(
 
     assert ensure_blockchain_schema(str(db), retries=3, retry_delay=0) is False
     assert state["calls"] == 1  # non-transient error -> no retry
+
+
+def _create_legacy_proofs_table(path: Path) -> None:
+    """Create the pre-realignment ``blockchain_proofs`` table (FK to ``files``)."""
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE blockchain_proofs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_hash TEXT UNIQUE NOT NULL,
+                ots_proof_blob BLOB,
+                status TEXT DEFAULT 'PENDING',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(file_hash) REFERENCES files(hash)
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO blockchain_proofs (file_hash, status) VALUES (?, 'SUBMITTED')",
+            (VALID_HASH_A,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_legacy_schema_is_migrated_dropping_dangling_fk(tmp_path: Path) -> None:
+    """A legacy table referencing the removed ``files`` table must be rebuilt."""
+    db = tmp_path / "legacy.db"
+    _create_legacy_proofs_table(db)
+
+    assert ensure_blockchain_schema(str(db)) is True
+
+    conn = sqlite3.connect(str(db))
+    try:
+        # The dangling foreign key to the non-existent ``files`` table is gone.
+        assert conn.execute("PRAGMA foreign_key_list(blockchain_proofs)").fetchall() == []
+        # Existing rows are preserved through the rebuild.
+        assert conn.execute(
+            "SELECT status FROM blockchain_proofs WHERE file_hash = ?", (VALID_HASH_A,)
+        ).fetchone()[0] == "SUBMITTED"
+    finally:
+        conn.close()
+
+
+def test_inserts_succeed_after_migration_with_fk_enforced(tmp_path: Path) -> None:
+    """Post-migration inserts must not raise 'no such table: main.files'."""
+    db = tmp_path / "legacy.db"
+    _create_legacy_proofs_table(db)
+    assert ensure_blockchain_schema(str(db)) is True
+
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute("PRAGMA foreign_keys = ON;")
+        conn.execute(
+            "INSERT INTO blockchain_proofs (file_hash, status) VALUES (?, 'PENDING')",
+            (VALID_HASH_B,),
+        )
+        conn.commit()
+        assert conn.execute(
+            "SELECT status FROM blockchain_proofs WHERE file_hash = ?", (VALID_HASH_B,)
+        ).fetchone()[0] == "PENDING"
+    finally:
+        conn.close()
+
+
+def test_clean_schema_migration_is_noop(tmp_path: Path) -> None:
+    """Running the migration twice on a clean schema is harmless and idempotent."""
+    db = tmp_path / "clean.db"
+    assert ensure_blockchain_schema(str(db)) is True
+    assert ensure_blockchain_schema(str(db)) is True
+
+    conn = sqlite3.connect(str(db))
+    try:
+        assert conn.execute("PRAGMA foreign_key_list(blockchain_proofs)").fetchall() == []
+    finally:
+        conn.close()
