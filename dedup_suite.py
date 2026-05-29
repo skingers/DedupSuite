@@ -1558,6 +1558,10 @@ COLOR_NEUTRAL_HOVER = "#393C3E"
 COLOR_HINT = "#9A9A9A"
 BRAND_BLACK = "#0B0B0D"
 
+# Activity logs are captured automatically (no manual file picker) under this
+# directory, named ``YYYY-MM-DD_[Context]_Log.txt``.
+LOG_DIR = "logs"
+
 FONT_TITLE = ("Segoe UI", 20, "bold")
 FONT_HEADER = ("Segoe UI", 15, "bold")
 FONT_BODY = ("Segoe UI", 12)
@@ -1824,6 +1828,14 @@ class DedupApp:
         header.pack(side="top", fill="x")
         header.pack_propagate(False)
 
+        # Right-aligned background-task status indicator (click for an info
+        # pop-up). Created first so the wordmark early-return cannot skip it.
+        self.header_status = ctk.CTkLabel(
+            header, text="", font=("Segoe UI", 11), text_color=COLOR_INFO, cursor="hand2",
+        )
+        self.header_status.pack(side="right", padx=18)
+        self.header_status.bind("<Button-1>", lambda _e: self._show_rationalise_info())
+
         # Preferred: official wordmark lockup image (SVG master or raster),
         # rendered once and cached at a header-friendly height.
         wordmark_source = self._resolve_brand_source("wordmark.svg", "wordmark.png")
@@ -1872,11 +1884,103 @@ class DedupApp:
         self.log_area.delete(1.0, tk.END)
 
     def save_log(self):
-        f = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")])
-        if f:
+        """Capture the activity log automatically (no manual file picker)."""
+        self._capture_log("Manual")
+
+    @staticmethod
+    def _human_size(num_bytes: float) -> str:
+        """Format a byte count as a human-readable string (B…TB)."""
+        size = float(num_bytes or 0)
+        for unit in ("B", "KB", "MB", "GB"):
+            if size < 1024:
+                return f"{size:.2f} {unit}"
+            size /= 1024
+        return f"{size:.2f} TB"
+
+    def _toast(self, message: str, kind: str = "info", duration: int = 3200) -> None:
+        """Show a small, non-blocking toast near the window's bottom-right.
+
+        Auto-dismisses after ``duration`` ms. Must be called on the main thread
+        (dispatch via ``root.after`` from worker threads).
+
+        Args:
+            message: Text to display.
+            kind: ``"info"``, ``"success"`` or ``"error"`` (accent colour).
+            duration: Milliseconds before the toast disappears.
+        """
+        try:
+            previous = getattr(self, "_toast_win", None)
+            if previous is not None and previous.winfo_exists():
+                previous.destroy()
+        except tk.TclError:
+            pass
+        accent = {"error": COLOR_DANGER, "success": COLOR_SAFE}.get(kind, COLOR_INFO)
+        try:
+            win = tk.Toplevel(self.root)
+            win.wm_overrideredirect(True)
             try:
-                with open(f, "w") as file: file.write(self.log_area.get(1.0, tk.END))
-            except Exception as e: messagebox.showerror("Error", f"Could not save log: {e}")
+                win.attributes("-topmost", True)
+            except tk.TclError:
+                pass
+            frame = tk.Frame(win, bg="#1C1C1E", highlightbackground=accent, highlightthickness=1)
+            frame.pack(fill="both", expand=True)
+            tk.Label(
+                frame, text=message, bg="#1C1C1E", fg="#E6E6E6",
+                font=("Segoe UI", 10), padx=14, pady=8,
+            ).pack()
+            win.update_idletasks()
+            rx, ry = self.root.winfo_rootx(), self.root.winfo_rooty()
+            rw, rh = self.root.winfo_width(), self.root.winfo_height()
+            x = rx + rw - win.winfo_width() - 24
+            y = ry + rh - win.winfo_height() - 24
+            win.wm_geometry(f"+{x}+{y}")
+            self._toast_win = win
+            self.root.after(duration, lambda w=win: w.winfo_exists() and w.destroy())
+        except tk.TclError:
+            pass
+
+    def _set_header_status(self, text: str) -> None:
+        """Update the header background-task indicator (empty string clears it)."""
+        if hasattr(self, "header_status"):
+            self.header_status.configure(text=text)
+
+    def _show_rationalise_info(self) -> None:
+        """Explain what Rationalisation does, in a small info pop-up."""
+        messagebox.showinfo(
+            "About Rationalisation",
+            "Identifies and categorises redundant vs. golden file versions "
+            "across your data mine, cryptographically linking legacy files to "
+            "their source.\n\n"
+            "This runs in the background — you remain free to use DedupSuite "
+            "while it works.",
+        )
+
+    def _capture_log(self, context_name: str) -> Optional[str]:
+        """Write the activity log to ``logs/`` with a smart, dated filename.
+
+        Replaces the old manual save dialog. The file is named
+        ``YYYY-MM-DD_[ContextName]_Log.txt`` and a non-blocking toast confirms
+        capture.
+
+        Args:
+            context_name: Caller-supplied context (e.g. ``"Audit"``,
+                ``"BulkArchive"``, ``"Rationalise"``).
+
+        Returns:
+            The path written, or ``None`` on failure.
+        """
+        try:
+            log_dir = os.path.join(os.path.dirname(self.db_path), LOG_DIR)
+            os.makedirs(log_dir, exist_ok=True)
+            filename = f"{time.strftime('%Y-%m-%d')}_{context_name}_Log.txt"
+            path = os.path.join(log_dir, filename)
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(self.log_area.get(1.0, tk.END))
+            self._toast(f"Log captured: {filename}", kind="success")
+            return path
+        except OSError as exc:
+            self.log(f"Log capture failed: {exc}")
+            return None
 
     def progress(self, cur, tot, msg=""):
         self.root.after(0, lambda: self._progress_ui(cur, tot, msg))
@@ -2215,8 +2319,18 @@ class DedupApp:
         ``root.after`` to respect Tkinter's single-threaded contract.
         """
         # Already on the main thread here (button callback): safe to touch widgets.
-        self.btn_rationalize.configure(state="disabled", text="Processing...")
-        self.log("Rationalizing data mine... this may take a moment.")
+        self.btn_rationalize.configure(state="disabled", text="Rationalising…")
+        try:
+            size = self._human_size(self.db_manager.get_mine_stats().get('total_storage', 0))
+        except Exception:
+            size = ""
+        indicator = (
+            f"Rationalising {size} of data in the background…" if size
+            else "Rationalising in the background…"
+        )
+        self._set_header_status(indicator)
+        self._toast("Rationalisation initiated: Task running in background.")
+        self.log("Rationalisation initiated: Task running in background.")
 
         def worker() -> None:
             try:
@@ -2229,35 +2343,32 @@ class DedupApp:
         threading.Thread(target=worker, daemon=True).start()
 
     def _finish_rationalize(self, error: Optional[Exception] = None) -> None:
-        """Re-enable the button and refresh stats on the main thread.
+        """Re-enable the button, clear the indicator, and refresh stats.
+
+        Runs on the main thread (dispatched via ``root.after``). Captures the
+        activity log on success.
 
         Args:
             error: Exception raised by the background pass, if any.
         """
         self.btn_rationalize.configure(state="normal", text="Rationalize")
+        self._set_header_status("")
         if error is not None:
-            self.log(f"Rationalization failed: {error}")
-            messagebox.showerror("Rationalize", f"Rationalization failed: {error}")
+            self.log(f"Rationalisation failed: {error}")
+            self._toast(f"Rationalisation failed: {error}", kind="error")
             return
         self.update_datamine_stats()
-        self.log("Rationalization complete. Data Mine Summary updated.")
+        self.log("Rationalisation complete. Data Mine Summary updated.")
+        self._capture_log("Rationalise")
 
     def update_datamine_stats(self):
         stats = self.db_manager.get_mine_stats()
         self.lbl_tot_files.configure(text=f"Total Files Indexed: {stats['total_files']}")
         self.lbl_golden.configure(text=f"Total Unique (Golden) Files: {stats['golden_files']}")
-        
-        s = stats['total_storage']
-        storage_str = f"{s} B"
-        for u in ['B','KB','MB','GB']:
-            if s < 1024:
-                storage_str = f"{s:.2f} {u}"
-                break
-            s /= 1024
-        else:
-            storage_str = f"{s:.2f} TB"
-            
-        self.lbl_storage.configure(text=f"Total Storage Used: {storage_str}")
+
+        self.lbl_storage.configure(
+            text=f"Total Storage Used: {self._human_size(stats['total_storage'])}"
+        )
         
         recent = self.db_manager.get_recent_golden_files(50)
         self.txt_golden.configure(state="normal")
@@ -2416,7 +2527,7 @@ class DedupApp:
                     else: subprocess.call(['xdg-open', str(report_path)])
                 except: pass
             
-            self.root.after(0, lambda m=msg: [archive_win.destroy(), messagebox.showinfo("Archive Complete", m), self.update_datamine_stats()])
+            self.root.after(0, lambda m=msg: [archive_win.destroy(), messagebox.showinfo("Archive Complete", m), self.update_datamine_stats(), self._capture_log("BulkArchive")])
         threading.Thread(target=archive_task, daemon=True).start()
 
     def revert_last_archive(self):
@@ -2575,6 +2686,7 @@ class DedupApp:
                 self.log(f"Error during scan: {e}")
             finally:
                 self.root.after(0, self.reset_scan_buttons)
+                self.root.after(0, lambda: self._capture_log("Audit"))
         threading.Thread(target=run, daemon=True).start()
 
     def export_knowledge_graph(self, session_id: str, source_path: str) -> None:

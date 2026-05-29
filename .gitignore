@@ -14,6 +14,7 @@ dist/
 # --- Project Clutter & Legacy Directories ---
 _archive_pre_v2/
 _PRE_V2_LOGS/
+logs/
 *.log
 *.csv
 *.pdf
