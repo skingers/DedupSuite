@@ -29,6 +29,13 @@ venv/
 env/
 pip-log.txt
 
+# --- Test & Coverage Artefacts ---
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
 # --- IDE & OS Workspaces ---
 .vscode/
 .idea/

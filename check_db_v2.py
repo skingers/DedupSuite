@@ -8,9 +8,20 @@ from typing import Optional
 
 
 def ensure_blockchain_schema(db_path: str, *, retries: int = 3, retry_delay: float = 0.5) -> bool:
-    """Ensure the blockchain_proofs table exists in the target SQLite database.
+    """Ensure the ``blockchain_proofs`` table exists in the target database.
 
-    Returns True when schema creation succeeds, otherwise False.
+    Opens a short-lived connection, enables foreign keys, and creates the
+    table if absent. Transient ``database is locked``/``busy`` errors are
+    retried with a fixed delay; other operational errors fail gracefully.
+
+    Args:
+        db_path: Path to the SQLite database file.
+        retries: Maximum number of attempts when the database is locked/busy.
+        retry_delay: Seconds to wait between retry attempts.
+
+    Returns:
+        ``True`` if the schema is present after the call, ``False`` if every
+        attempt failed.
     """
     conn: Optional[sqlite3.Connection] = None
 

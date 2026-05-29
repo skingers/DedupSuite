@@ -14,11 +14,11 @@ import uuid
 import platform
 import subprocess
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import messagebox, filedialog
 import concurrent.futures
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Callable, DefaultDict, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from check_db_v2 import ensure_blockchain_schema
 from core.notary import DedupNotary
 
@@ -30,10 +30,9 @@ except ImportError:
 
 # --- External Dependencies ---
 try:
-    from PIL import Image, ImageTk, ImageDraw
+    from PIL import Image, ImageDraw
     import cv2
     import imagehash
-    import numpy as np
 except ImportError:
     print("Missing dependencies. Run: pip install pillow opencv-python-headless imagehash")
     sys.exit(1)
@@ -41,7 +40,6 @@ except ImportError:
 try:
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import letter
-    from reportlab.lib.utils import ImageReader
     HAS_REPORTLAB = True
 except ImportError:
     HAS_REPORTLAB = False
@@ -479,6 +477,16 @@ class FileAuditor:
         self.bytes_saved = 0
 
     def get_partial_hash(self, filepath: Path) -> Optional[str]:
+        """Return the SHA-256 hex digest of the first 4 KiB of ``filepath``.
+
+        Used as a fast pre-filter before full hashing.
+
+        Args:
+            filepath: Path to the file to read.
+
+        Returns:
+            The hex digest string, or ``None`` if the file cannot be read.
+        """
         try:
             with open(filepath, 'rb') as f:
                 return hashlib.sha256(f.read(4096)).hexdigest()
@@ -487,6 +495,20 @@ class FileAuditor:
             return None
 
     def get_file_hash(self, filepath: Path, chunk_size: int = 1048576) -> Optional[str]:
+        """Return the full SHA-256 hex digest of ``filepath``.
+
+        The file is read in ``chunk_size`` blocks so that arbitrarily large
+        files can be hashed with bounded memory. The hash is computed over the
+        complete byte stream, making it suitable for exact-duplicate detection.
+
+        Args:
+            filepath: Path to the file to hash.
+            chunk_size: Number of bytes to read per iteration (default 1 MiB).
+
+        Returns:
+            The 64-character SHA-256 hex digest, or ``None`` if the file cannot
+            be read.
+        """
         hasher = hashlib.sha256()
         try:
             with open(filepath, 'rb') as f:

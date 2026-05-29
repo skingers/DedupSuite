@@ -8,14 +8,38 @@ from typing import List
 
 
 class DedupNotary:
-    """Submit pending file hashes to OpenTimestamps and persist proofs."""
+    """Submit pending file hashes to OpenTimestamps and persist their proofs.
+
+    Attributes:
+        db_path: Filesystem path to the SQLite ledger holding ``files`` and
+            ``blockchain_proofs`` tables.
+        cloud_oracle_url: Endpoint of the remote cloud anchoring oracle. It is
+            reserved for the HTTP anchoring pathway and is not contacted by the
+            local OpenTimestamps submission flow.
+    """
 
     def __init__(self, db_path: str) -> None:
+        """Initialise the notary.
+
+        Args:
+            db_path: Path to the SQLite database to read hashes from and write
+                proofs back into.
+        """
         self.db_path = db_path
         self.cloud_oracle_url = "http://34.13.47.2:5000/api/v1/anchor"
 
     def batch_submit_unnotarised(self) -> None:
-        """Submit unnotarised or pending hashes and store serialized OTS proofs."""
+        """Notarise every file hash that is missing or still ``PENDING``.
+
+        Selects distinct hashes from ``files`` that have no row in
+        ``blockchain_proofs`` or whose status is ``PENDING``, computes an
+        OpenTimestamps proof for each, and upserts the serialized proof blob
+        with status ``SUBMITTED``. Per-hash failures are logged and skipped so
+        a single bad asset cannot abort the batch.
+
+        Returns:
+            None. Progress and failures are reported to standard error.
+        """
         conn: sqlite3.Connection | None = None
 
         try:
@@ -69,8 +93,10 @@ class DedupNotary:
                         )
 
                     print(f"[NOTARY] SUBMITTED proof for {file_hash}", file=sys.stderr)
-                except (TimeoutError, Exception) as exc:
-                    # Keep batch processing resilient: one failing hash must not stop the loop.
+                except Exception as exc:
+                    # Keep batch processing resilient: one failing hash (network
+                    # timeout, calendar error, serialisation issue) must not stop
+                    # the loop. ``Exception`` already covers ``TimeoutError``.
                     print(f"[NOTARY] Failed for {file_hash}: {exc}", file=sys.stderr)
                     continue
         except sqlite3.OperationalError as exc:
