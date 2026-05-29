@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from check_db_v2 import ensure_blockchain_schema
 from core.notary import DedupNotary
+from core.markdown_translator import MarkdownTranslator, UniqueFileRecord
+from network.notary_bridge import CloudNotaryBridge
 
 try:
     import customtkinter as ctk
@@ -2041,6 +2043,19 @@ class DedupApp:
                     import sys
                     print(f"Failed to initialize notary background thread: {e}", file=sys.stderr)
 
+                # Weave unique files into the Obsidian knowledge graph and route
+                # anchoring through the cloud gateway. Best-effort and isolated:
+                # any failure here must never abort the audit conclusion.
+                try:
+                    kg_thread = threading.Thread(
+                        target=self.export_knowledge_graph,
+                        args=(self.current_session_id, active_path),
+                        daemon=True,
+                    )
+                    kg_thread.start()
+                except Exception as e:
+                    self.log(f"Failed to start knowledge graph export: {e}")
+
                 self.root.after(0, self.update_datamine_stats)
                 
                 if self.review_var.get():
@@ -2056,6 +2071,70 @@ class DedupApp:
             finally:
                 self.root.after(0, self.reset_scan_buttons)
         threading.Thread(target=run, daemon=True).start()
+
+    def export_knowledge_graph(self, session_id: str, source_path: str) -> None:
+        """Export this session's unique files to Obsidian and cloud-anchor them.
+
+        Reads the golden (unique) file rows for ``session_id`` from the ledger,
+        renders an Obsidian knowledge graph via :class:`MarkdownTranslator`, and
+        best-effort anchors each hash through :class:`CloudNotaryBridge`. All
+        failures are logged and contained so the GUI is never disrupted.
+
+        Args:
+            session_id: The audit session whose golden files should be exported.
+            source_path: The scanned source directory (export is written here).
+        """
+        try:
+            with self.db_manager.conn:
+                cur = self.db_manager.conn.cursor()
+                cur.execute(
+                    """
+                    SELECT full_path, sha256_hash
+                    FROM file_index
+                    WHERE is_golden = 1
+                      AND sha256_hash IS NOT NULL
+                      AND last_session_id = ?
+                    """,
+                    (session_id,),
+                )
+                rows = cur.fetchall()
+
+            if not rows:
+                self.log("Knowledge graph: no unique files for this session.")
+                return
+
+            records = [
+                UniqueFileRecord(path=Path(full_path), file_hash=sha256_hash)
+                for full_path, sha256_hash in rows
+            ]
+
+            export_root = source_path if source_path and os.path.isdir(source_path) else os.path.dirname(self.db_path)
+            translator = MarkdownTranslator(export_root)
+            result = translator.translate(records)
+            self.log(
+                f"Knowledge graph: wrote {len(result.note_paths)} notes and "
+                f"{len(result.index_paths)} folder indexes to {result.export_dir}."
+            )
+
+            bridge = CloudNotaryBridge(logger=self.log)
+            anchored = 0
+            for record in records:
+                outcome = bridge.anchor(record.file_hash)
+                if outcome.ok:
+                    anchored += 1
+                    with self.db_manager.conn:
+                        self.db_manager.conn.execute(
+                            """
+                            INSERT INTO blockchain_proofs (file_hash, status, updated_at)
+                            VALUES (?, 'SUBMITTED', CURRENT_TIMESTAMP)
+                            ON CONFLICT(file_hash) DO UPDATE SET
+                                status = 'SUBMITTED', updated_at = CURRENT_TIMESTAMP
+                            """,
+                            (record.file_hash,),
+                        )
+            self.log(f"Cloud notary: anchored {anchored}/{len(records)} hashes via gateway.")
+        except Exception as e:
+            self.log(f"Knowledge graph export failed: {e}")
 
     def _show_review(self, groups, total, hash_cache):
         self.review_dialog = ReviewDialog(self.root, groups, total, self.db_manager, self.mode_var.get(), precomputed_hashes=hash_cache, 

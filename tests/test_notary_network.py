@@ -28,12 +28,17 @@ VALID_HASH_C = "c" * 64
 
 
 def _build_db(path: Path, files: List[str]) -> None:
-    """Create the ``files`` + ``blockchain_proofs`` tables and seed hashes."""
+    """Create the active ``file_index`` + ``blockchain_proofs`` tables and seed hashes."""
     assert ensure_blockchain_schema(str(path)) is True
     conn = sqlite3.connect(str(path))
     try:
-        conn.execute("CREATE TABLE IF NOT EXISTS files (hash TEXT PRIMARY KEY)")
-        conn.executemany("INSERT INTO files (hash) VALUES (?)", [(h,) for h in files])
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS file_index (sha256_hash TEXT, full_path TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO file_index (sha256_hash, full_path) VALUES (?, ?)",
+            [(h, f"/seed/{h}.bin") for h in files],
+        )
         conn.commit()
     finally:
         conn.close()
@@ -97,13 +102,6 @@ def fake_opentimestamps(monkeypatch: pytest.MonkeyPatch) -> Callable[[Callable],
         monkeypatch.setitem(__import__("sys").modules, "opentimestamps.timestamp", ts_module)
 
     return _set_behaviour
-
-
-def test_endpoint_targets_cloud_oracle_on_port_5000() -> None:
-    notary = DedupNotary("ignored.db")
-    assert notary.cloud_oracle_url == "http://34.13.47.2:5000/api/v1/anchor"
-    assert ":5000/" in notary.cloud_oracle_url
-    assert notary.cloud_oracle_url.endswith("/api/v1/anchor")
 
 
 def test_submits_only_missing_and_pending(tmp_path: Path, fake_opentimestamps) -> None:

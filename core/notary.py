@@ -11,11 +11,8 @@ class DedupNotary:
     """Submit pending file hashes to OpenTimestamps and persist their proofs.
 
     Attributes:
-        db_path: Filesystem path to the SQLite ledger holding ``files`` and
-            ``blockchain_proofs`` tables.
-        cloud_oracle_url: Endpoint of the remote cloud anchoring oracle. It is
-            reserved for the HTTP anchoring pathway and is not contacted by the
-            local OpenTimestamps submission flow.
+        db_path: Filesystem path to the SQLite ledger holding the active
+            ``file_index`` and ``blockchain_proofs`` tables.
     """
 
     def __init__(self, db_path: str) -> None:
@@ -26,16 +23,15 @@ class DedupNotary:
                 proofs back into.
         """
         self.db_path = db_path
-        self.cloud_oracle_url = "http://34.13.47.2:5000/api/v1/anchor"
 
     def batch_submit_unnotarised(self) -> None:
         """Notarise every file hash that is missing or still ``PENDING``.
 
-        Selects distinct hashes from ``files`` that have no row in
-        ``blockchain_proofs`` or whose status is ``PENDING``, computes an
-        OpenTimestamps proof for each, and upserts the serialized proof blob
-        with status ``SUBMITTED``. Per-hash failures are logged and skipped so
-        a single bad asset cannot abort the batch.
+        Selects distinct ``sha256_hash`` values from the active ``file_index``
+        table that have no row in ``blockchain_proofs`` or whose status is
+        ``PENDING``, computes an OpenTimestamps proof for each, and upserts the
+        serialized proof blob with status ``SUBMITTED``. Per-hash failures are
+        logged and skipped so a single bad asset cannot abort the batch.
 
         Returns:
             None. Progress and failures are reported to standard error.
@@ -49,10 +45,11 @@ class DedupNotary:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT DISTINCT f.hash
-                FROM files AS f
-                LEFT JOIN blockchain_proofs AS bp ON bp.file_hash = f.hash
-                WHERE bp.file_hash IS NULL OR bp.status = 'PENDING'
+                SELECT DISTINCT fi.sha256_hash
+                FROM file_index AS fi
+                LEFT JOIN blockchain_proofs AS bp ON bp.file_hash = fi.sha256_hash
+                WHERE fi.sha256_hash IS NOT NULL
+                  AND (bp.file_hash IS NULL OR bp.status = 'PENDING')
                 """
             )
             target_hashes: List[str] = [row[0] for row in cursor.fetchall() if row and row[0]]

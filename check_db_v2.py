@@ -36,8 +36,7 @@ def ensure_blockchain_schema(db_path: str, *, retries: int = 3, retry_delay: flo
                     file_hash TEXT UNIQUE NOT NULL,
                     ots_proof_blob BLOB,
                     status TEXT DEFAULT 'PENDING',
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY(file_hash) REFERENCES files(hash)
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
                 """
             )
