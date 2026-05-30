@@ -26,6 +26,8 @@ from check_db_v2 import ensure_blockchain_schema
 from core.notary import DedupNotary
 from core.markdown_translator import MarkdownTranslator, UniqueFileRecord
 from network.notary_bridge import CloudNotaryBridge
+import ingest_kernel
+from pipeline import run_pipeline
 
 try:
     import customtkinter as ctk
@@ -616,28 +618,24 @@ class FileAuditor:
     def get_file_hash(self, filepath: Path, chunk_size: int = 1048576) -> Optional[str]:
         """Return the full SHA-256 hex digest of ``filepath``.
 
-        The file is read in ``chunk_size`` blocks so that arbitrarily large
-        files can be hashed with bounded memory. The hash is computed over the
-        complete byte stream, making it suitable for exact-duplicate detection.
+        Delegates to :func:`ingest_kernel.parse_metadata_and_hash` (streaming
+        readinto with a per-thread buffer). ``chunk_size`` is accepted for API
+        compatibility but does not change the optimized read strategy.
 
         Args:
             filepath: Path to the file to hash.
-            chunk_size: Number of bytes to read per iteration (default 1 MiB).
+            chunk_size: Retained for backward compatibility with callers/tests.
 
         Returns:
             The 64-character SHA-256 hex digest, or ``None`` if the file cannot
             be read.
         """
-        hasher = hashlib.sha256()
-        try:
-            with open(filepath, 'rb') as f:
-                while chunk := f.read(chunk_size):
-                    self.pause_event.wait()
-                    hasher.update(chunk)
-            return hasher.hexdigest()
-        except OSError:
-            # AUDIT-REVIEW: Handle unreadable files explicitly instead of bare except.
-            return None
+        del chunk_size
+        self.pause_event.wait()
+        record = ingest_kernel.parse_metadata_and_hash(filepath)
+        if record.get("status") == "success":
+            return record["hash"]
+        return None
 
     def run(self) -> None:
         self.log(f"--- Starting Exact Audit on: {self.root_path} ---")
@@ -661,44 +659,37 @@ class FileAuditor:
                     if self.files_scanned % 100 == 0: self.update_progress(0, 1, f"Scanning: {self.files_scanned} files") # Use 0/1 for indeterminate
                 except OSError: continue
 
-        # Force every file into the hashing executor to ensure the session_id is saved!
         full_tasks = [(fp, s) for s, paths in size_map.items() for fp in paths]
         processed_groups = defaultdict(lambda: defaultdict(list))
 
-        # Phase 2: Full Hashing
+        # Phase 2: concurrent hash + DB ingest via producer/consumer pipeline
         if full_tasks and not self.stop_event.is_set():
-            self.update_progress(0, len(full_tasks), "Hashing content...")
-            with concurrent.futures.ThreadPoolExecutor(max_workers=self.threads) as executor:
-                future_to_file = {executor.submit(self.get_file_hash, fp): (fp, s) for fp, s in full_tasks}
-                completed = 0
-                for future in concurrent.futures.as_completed(future_to_file):
-                    self.pause_event.wait()
-                    if self.stop_event.is_set(): break
-                    fp, s = future_to_file[future]
-                    h = future.result()
-                    if h: 
-                        processed_groups[s][h].append(fp)
-                        if self.db_manager:
-                            try:
-                                mtime = fp.stat().st_mtime
-                            except Exception:
-                                mtime = 0.0
-                                
-                            with self.db_manager.conn:
-                                cur = self.db_manager.conn.cursor()
-                                cur.execute('''
-                                    UPDATE file_index 
-                                    SET sha256_hash = ?, file_size = ?, modified_time = ?, last_session_id = ? 
-                                    WHERE full_path = ?
-                                ''', (h, s, mtime, self.session_id, str(fp)))
-                                
-                                if cur.rowcount == 0:
-                                    cur.execute('''
-                                        INSERT INTO file_index (sha256_hash, phash, file_name, file_size, modified_time, full_path, device_id, last_session_id)
-                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                                    ''', (h, None, fp.name, s, mtime, str(fp), self.device_id, self.session_id))
-                    completed += 1
-                    self.update_progress(completed, len(full_tasks), f"Hashing: {completed}/{len(full_tasks)}")
+            paths_only = [fp for fp, _ in full_tasks]
+            total = len(paths_only)
+            self.update_progress(0, total, "Hashing content...")
+            db_path = (
+                Path(self.db_manager.db_path) if self.db_manager is not None else None
+            )
+            _, _, collected = run_pipeline(
+                paths_only,
+                db_path,
+                device_id=self.device_id,
+                session_id=self.session_id,
+                stop_event=self.stop_event,
+                pause_event=self.pause_event,
+            )
+            completed = 0
+            for path, record in collected:
+                self.pause_event.wait()
+                if self.stop_event.is_set():
+                    break
+                if record.get("status") == "success":
+                    meta = record["metadata"]
+                    processed_groups[meta["size"]][record["hash"]].append(path)
+                completed += 1
+                self.update_progress(
+                    completed, total, f"Hashing: {completed}/{total}"
+                )
 
         for size, hash_group in processed_groups.items():
             for h, file_list in hash_group.items():
