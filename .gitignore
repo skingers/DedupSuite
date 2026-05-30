@@ -3,6 +3,8 @@ data_mine.db
 data_mine.db-journal
 data_mine.db-wal
 data_mine.db-shm
+lab_ingest.db
+stress_*.db
 move_targets.json
 settings.json
 
@@ -14,6 +16,7 @@ dist/
 !dedup_suite.spec
 
 # --- Project Clutter & Legacy Directories ---
+shadow_lab/
 _archive_pre_v2/
 _PRE_V2_LOGS/
 logs/
