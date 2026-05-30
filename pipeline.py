@@ -8,6 +8,7 @@ thread writes to SQLite on a dedicated connection (WAL-safe). When ``db_path`` i
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import time
@@ -18,6 +19,7 @@ from typing import Callable, List, Optional, Sequence, Tuple
 
 import db_ingest
 import ingest_kernel
+from crypto_gate import get_crypto_gate
 
 Row = Tuple[Path, dict]
 
@@ -62,23 +64,41 @@ def _consumer_db(
     device_id: Optional[str],
     session_id: Optional[str],
 ) -> Tuple[int, List[Row]]:
+    gate = get_crypto_gate()
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     collected: List[Row] = []
     try:
         db_ingest.configure_connection(conn)
         inserted = 0
+        batch_index = 0
         while True:
             item = queue.get()
             try:
                 if item is SENTINEL:
                     break
                 collected.extend(item)
-                inserted += db_ingest.insert_batch(
-                    conn,
-                    item,
-                    device_id=device_id,
-                    session_id=session_id,
-                )
+                manifest = gate.build_batch_manifest(item)
+                row_count = len(manifest.get("entries", []))
+                if row_count:
+                    signature = gate.sign_manifest(manifest)
+                    inserted += db_ingest.insert_batch(
+                        conn,
+                        item,
+                        device_id=device_id,
+                        session_id=session_id,
+                    )
+                    db_ingest.insert_batch_signature(
+                        conn,
+                        batch_index=batch_index,
+                        manifest_json=json.dumps(
+                            manifest, sort_keys=True, separators=(",", ":")
+                        ),
+                        signature=signature,
+                        public_key=gate.public_key_bytes,
+                        row_count=row_count,
+                        created_at=manifest["signed_at"],
+                    )
+                    batch_index += 1
                 conn.commit()
             finally:
                 queue.task_done()

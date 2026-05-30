@@ -25,6 +25,29 @@ INSERT_SQL = """
     ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?)
 """
 
+INSERT_SIGNATURE_SQL = """
+    INSERT INTO batch_signatures (
+        batch_index, manifest_json, signature, public_key, row_count, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?)
+"""
+
+
+def ensure_signatures_schema(conn: sqlite3.Connection) -> None:
+    """Ensure the Ed25519 batch signature ledger table exists."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS batch_signatures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_index INTEGER NOT NULL,
+            manifest_json TEXT NOT NULL,
+            signature BLOB NOT NULL,
+            public_key BLOB NOT NULL,
+            row_count INTEGER NOT NULL,
+            created_at REAL NOT NULL
+        )
+        """
+    )
+
 
 def configure_connection(conn: sqlite3.Connection) -> None:
     """Apply ingest-oriented PRAGMAs on a dedicated writer connection."""
@@ -34,6 +57,7 @@ def configure_connection(conn: sqlite3.Connection) -> None:
     except sqlite3.OperationalError:
         pass
     conn.execute("PRAGMA synchronous=NORMAL")
+    ensure_signatures_schema(conn)
 
 
 def finalize_index(conn: sqlite3.Connection) -> None:
@@ -89,3 +113,27 @@ def insert_batch(
         inserted += len(pending)
 
     return inserted
+
+
+def insert_batch_signature(
+    conn: sqlite3.Connection,
+    *,
+    batch_index: int,
+    manifest_json: str,
+    signature: bytes,
+    public_key: bytes,
+    row_count: int,
+    created_at: float,
+) -> None:
+    """Persist an Ed25519 signature for a committed ingest batch."""
+    conn.execute(
+        INSERT_SIGNATURE_SQL,
+        (
+            batch_index,
+            manifest_json,
+            sqlite3.Binary(signature),
+            sqlite3.Binary(public_key),
+            row_count,
+            created_at,
+        ),
+    )
