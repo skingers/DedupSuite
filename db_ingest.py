@@ -45,14 +45,134 @@ INSERT_SIGNATURE_SQL = """
 """
 
 
+TRIAL_GOLDEN_LIMIT = 1000
+
 _FILE_INDEX_COLUMN_MIGRATIONS: tuple[str, ...] = (
     "last_session_id TEXT",
     "is_golden INTEGER DEFAULT 0",
+    "classification TEXT",
     "status TEXT DEFAULT 'active'",
     "pre_archive_path TEXT",
     "archive_transaction_id INTEGER",
     "ots_proof BLOB",
 )
+
+
+class TrialLimitExceededError(Exception):
+    """Raised when the Play-then-Pay trial cap on golden files is reached."""
+
+    def __init__(
+        self,
+        message: str = "Trial limit of 1000 Golden Files reached.",
+        *,
+        inserted: int = 0,
+        collected: Optional[List[Row]] = None,
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.inserted = inserted
+        self.collected = collected or []
+
+
+def get_golden_file_count(db_conn: sqlite3.Connection) -> int:
+    """Fast count of golden-classified rows in ``file_index``."""
+    ensure_file_index_schema(db_conn)
+    row = db_conn.execute(
+        "SELECT COUNT(*) FROM file_index WHERE classification = 'golden'"
+    ).fetchone()
+    return int(row[0] if row else 0)
+
+
+def assert_trial_capacity(
+    db_conn: sqlite3.Connection,
+    limit: int = TRIAL_GOLDEN_LIMIT,
+) -> None:
+    """Raise :class:`TrialLimitExceededError` when the golden cap is already met."""
+    if get_golden_file_count(db_conn) >= limit:
+        raise TrialLimitExceededError(
+            f"Trial limit of {limit} Golden Files reached."
+        )
+
+
+def _classify_ingested_row(
+    db_conn: sqlite3.Connection,
+    full_path: str,
+    file_hash: str,
+) -> None:
+    """Assign ``golden`` or ``legacy`` for a row just written during trial ingest."""
+    has_golden = db_conn.execute(
+        """
+        SELECT 1 FROM file_index
+        WHERE sha256_hash = ?
+          AND classification = 'golden'
+          AND full_path != ?
+        LIMIT 1
+        """,
+        (file_hash, full_path),
+    ).fetchone()
+    if has_golden:
+        db_conn.execute(
+            """
+            UPDATE file_index
+            SET classification = 'legacy', is_golden = 0
+            WHERE full_path = ?
+            """,
+            (full_path,),
+        )
+    else:
+        db_conn.execute(
+            """
+            UPDATE file_index
+            SET classification = 'golden', is_golden = 1
+            WHERE full_path = ?
+            """,
+            (full_path,),
+        )
+
+
+def insert_batch_with_trial(
+    conn: sqlite3.Connection,
+    records: Sequence[Row],
+    *,
+    device_id: Optional[str],
+    session_id: Optional[str],
+    trial_limit: int = TRIAL_GOLDEN_LIMIT,
+) -> int:
+    """Upsert records one-by-one, classifying golden/legacy until the trial cap."""
+    inserted = 0
+    for path, record in records:
+        if record.get("status") != "success":
+            continue
+        assert_trial_capacity(conn, trial_limit)
+        meta = record["metadata"]
+        file_hash = record["hash"]
+        full_path = str(path)
+        cur = conn.execute(
+            UPDATE_SQL,
+            (
+                file_hash,
+                meta["size"],
+                meta["mtime"],
+                session_id,
+                full_path,
+            ),
+        )
+        if cur.rowcount == 0:
+            conn.execute(
+                INSERT_SQL,
+                (
+                    file_hash,
+                    path.name,
+                    meta["size"],
+                    meta["mtime"],
+                    full_path,
+                    device_id,
+                    session_id,
+                ),
+            )
+        inserted += 1
+        _classify_ingested_row(conn, full_path, file_hash)
+    return inserted
 
 
 def normalize_export_mode(mode: str) -> ExportMode:
@@ -103,6 +223,25 @@ def ensure_file_index_schema(conn: sqlite3.Connection) -> None:
         col = spec.split()[0]
         if col not in columns:
             conn.execute(f"ALTER TABLE file_index ADD COLUMN {spec}")
+            columns.add(col)
+    if "classification" in columns:
+        conn.execute(
+            """
+            UPDATE file_index
+            SET classification = 'golden'
+            WHERE is_golden = 1
+              AND (classification IS NULL OR classification = '')
+            """
+        )
+        conn.execute(
+            """
+            UPDATE file_index
+            SET classification = 'legacy'
+            WHERE (is_golden = 0 OR is_golden IS NULL)
+              AND sha256_hash IS NOT NULL
+              AND (classification IS NULL OR classification = '')
+            """
+        )
 
 
 def ensure_signatures_schema(conn: sqlite3.Connection) -> None:

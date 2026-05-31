@@ -18,6 +18,7 @@ from queue import Queue
 from typing import Callable, List, Optional, Sequence, Tuple
 
 import db_ingest
+from db_ingest import TrialLimitExceededError
 import ingest_kernel
 from crypto_gate import get_crypto_gate
 
@@ -57,12 +58,95 @@ def _producer(
     queue.put(SENTINEL)
 
 
+def _run_trial_gated_ingest(
+    paths: Sequence[Path],
+    db_path: Path,
+    *,
+    device_id: Optional[str],
+    session_id: Optional[str],
+    trial_limit: int = db_ingest.TRIAL_GOLDEN_LIMIT,
+    stop_event: Optional[threading.Event] = None,
+    pause_event: Optional[threading.Event] = None,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> Tuple[float, int, List[Row]]:
+    """Sequential ingest with pre-hash trial checks and per-row golden classification."""
+    gate = get_crypto_gate()
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    collected: List[Row] = []
+    inserted = 0
+    batch_index = 0
+    start = time.perf_counter()
+
+    def _flush_batch(batch: List[Row]) -> None:
+        nonlocal inserted, batch_index
+        if not batch:
+            return
+        manifest = gate.build_batch_manifest(batch)
+        row_count = len(manifest.get("entries", []))
+        if row_count:
+            signature = gate.sign_manifest(manifest)
+            inserted += db_ingest.insert_batch_with_trial(
+                conn,
+                batch,
+                device_id=device_id,
+                session_id=session_id,
+                trial_limit=trial_limit,
+            )
+            db_ingest.insert_batch_signature(
+                conn,
+                batch_index=batch_index,
+                manifest_json=json.dumps(
+                    manifest, sort_keys=True, separators=(",", ":")
+                ),
+                signature=signature,
+                public_key=gate.public_key_bytes,
+                row_count=row_count,
+                created_at=manifest["signed_at"],
+            )
+            batch_index += 1
+        conn.commit()
+
+    try:
+        db_ingest.configure_connection(conn)
+        for index, path in enumerate(paths):
+            if stop_event and stop_event.is_set():
+                break
+            if pause_event:
+                pause_event.wait()
+            db_ingest.assert_trial_capacity(conn, trial_limit)
+            record = ingest_kernel.parse_metadata_and_hash(path)
+            row = (path, record)
+            collected.append(row)
+            if record.get("status") == "success":
+                _flush_batch([row])
+            if progress_callback:
+                progress_callback(len(collected), len(paths), f"Hashing: {path.name}")
+        if inserted:
+            db_ingest.finalize_index(conn)
+    except TrialLimitExceededError as exc:
+        conn.commit()
+        if inserted:
+            db_ingest.finalize_index(conn)
+        raise TrialLimitExceededError(
+            exc.message,
+            inserted=inserted,
+            collected=collected,
+        ) from exc
+    finally:
+        conn.close()
+
+    duration = time.perf_counter() - start
+    return duration, inserted, collected
+
+
 def _consumer_db(
     queue: Queue,
     db_path: Path,
     *,
     device_id: Optional[str],
     session_id: Optional[str],
+    use_trial_gate: bool = False,
+    trial_limit: int = db_ingest.TRIAL_GOLDEN_LIMIT,
 ) -> Tuple[int, List[Row]]:
     gate = get_crypto_gate()
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
@@ -81,12 +165,21 @@ def _consumer_db(
                 row_count = len(manifest.get("entries", []))
                 if row_count:
                     signature = gate.sign_manifest(manifest)
-                    inserted += db_ingest.insert_batch(
-                        conn,
-                        item,
-                        device_id=device_id,
-                        session_id=session_id,
-                    )
+                    if use_trial_gate:
+                        inserted += db_ingest.insert_batch_with_trial(
+                            conn,
+                            item,
+                            device_id=device_id,
+                            session_id=session_id,
+                            trial_limit=trial_limit,
+                        )
+                    else:
+                        inserted += db_ingest.insert_batch(
+                            conn,
+                            item,
+                            device_id=device_id,
+                            session_id=session_id,
+                        )
                     db_ingest.insert_batch_signature(
                         conn,
                         batch_index=batch_index,
@@ -135,6 +228,7 @@ def run_pipeline(
     stop_event: Optional[threading.Event] = None,
     pause_event: Optional[threading.Event] = None,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    trial_golden_limit: Optional[int] = db_ingest.TRIAL_GOLDEN_LIMIT,
 ) -> Tuple[float, int, List[Row]]:
     """Run the concurrent pipeline.
 
@@ -154,6 +248,30 @@ def run_pipeline(
     """
     if not paths:
         return 0.0, 0, []
+
+    if db_path is not None and trial_golden_limit is not None:
+        try:
+            duration, inserted, collected = _run_trial_gated_ingest(
+                paths,
+                db_path,
+                device_id=device_id,
+                session_id=session_id,
+                trial_limit=trial_golden_limit,
+                stop_event=stop_event,
+                pause_event=pause_event,
+                progress_callback=progress_callback,
+            )
+        except TrialLimitExceededError as exc:
+            if progress_callback:
+                progress_callback(
+                    len(exc.collected),
+                    len(paths),
+                    "Trial golden limit reached",
+                )
+            raise
+        if progress_callback:
+            progress_callback(len(collected), len(paths), "Pipeline complete")
+        return duration, inserted, collected
 
     queue: Queue = Queue(maxsize=QUEUE_MAXSIZE)
     result_box: List[Tuple[int, List[Row]]] = []

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import db_ingest
+from db_ingest import TrialLimitExceededError
 from dedup_suite import DatabaseManager
 from integrity_check import IntegrityCheck
 from pipeline import PRODUCER_WORKERS, run_pipeline
@@ -159,13 +160,19 @@ def run_production(
 
     _prepare_database(paths.database, device)
 
-    duration, inserted, collected = run_pipeline(
-        file_paths,
-        paths.database,
-        device_id=device,
-        session_id=session,
-        progress_callback=_progress,
-    )
+    try:
+        duration, inserted, collected = run_pipeline(
+            file_paths,
+            paths.database,
+            device_id=device,
+            session_id=session,
+            progress_callback=_progress,
+        )
+    except TrialLimitExceededError as exc:
+        _log(str(exc.message))
+        duration = 0.0
+        inserted = exc.inserted
+        collected = exc.collected
     success_rows = sum(1 for _, rec in collected if rec.get("status") == "success")
     read_errors = len(collected) - success_rows
     _log(
