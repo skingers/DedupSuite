@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import os
 import sys
 import sqlite3
@@ -16,6 +17,7 @@ import traceback
 import uuid
 import platform
 import subprocess
+import webbrowser
 import tkinter as tk
 from tkinter import messagebox, filedialog
 import concurrent.futures
@@ -24,7 +26,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 from check_db_v2 import ensure_blockchain_schema
 from core.notary import DedupNotary
-from core.markdown_translator import MarkdownTranslator, UniqueFileRecord
+from core.markdown_translator import MarkdownTranslator, UniqueFileRecord, _sanitise
 from network.notary_bridge import CloudNotaryBridge
 import ingest_kernel
 from pipeline import run_pipeline
@@ -552,6 +554,8 @@ class IconFactory:
         icons['close'] = make_ctk(img)
         return icons
 
+APP_VERSION = "2.0.0"
+
 # ==========================================
 #               LOGIC CLASSES
 # ==========================================
@@ -744,7 +748,7 @@ class FileAuditor:
                         shutil.move(str(dupe), str(target))
                 except (OSError, shutil.Error) as e:
                     self.log(f"Error processing {dupe.name}: {e}")
-            self.log(f"  {'Deleted' if self.delete else 'Moved'}: {dupe.name}")
+            self.log(f"  {'Deleted' if self.delete else 'Copied'}: {dupe.name}")
 
 class VideoFileAuditor(FileAuditor):
     """Perceptual-hash audit for images and video files."""
@@ -1057,7 +1061,7 @@ class ReviewDialog:
         
         ctk.CTkButton(f_top, text="Clear", image=self.icons['close'], compound="left", fg_color="gray", command=self.clear_filter, width=80).pack(side="left", padx=5, pady=10)
         ctk.CTkButton(f_top, text="Delete All Shown", image=self.icons['trash'], compound="left", fg_color="#C92C2C", hover_color="#992222", command=self.delete_all_shown).pack(side="left", padx=5, pady=10)
-        ctk.CTkButton(f_top, text="Move All Shown", image=self.icons['arrow'], compound="left", command=self.move_all_shown).pack(side="left", padx=5, pady=10)
+        ctk.CTkButton(f_top, text="Copy All Shown", image=self.icons['arrow'], compound="left", command=self.move_all_shown).pack(side="left", padx=5, pady=10)
         
         self.lbl_stats = ctk.CTkLabel(f_top, text=f"Total Duplicates: {len(self.pairs)}")
         self.lbl_stats.pack(side="right", padx=20, pady=10)
@@ -1115,7 +1119,7 @@ class ReviewDialog:
         
         target_frame = ctk.CTkFrame(f_c_center, fg_color="transparent")
         target_frame.pack(side="left", padx=10, pady=0, anchor="center")
-        ctk.CTkLabel(target_frame, text="Target Archive Folder", font=("Segoe UI", 10)).grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(target_frame, text="Copy destination (Vault folder)", font=("Segoe UI", 10)).grid(row=0, column=0, sticky="w")
         self.cb_targets = ctk.CTkComboBox(target_frame, variable=self.target_var, values=self.move_targets, width=150, state="readonly")
         self.cb_targets.grid(row=1, column=0, sticky="ew")
         
@@ -1126,7 +1130,7 @@ class ReviewDialog:
                 self._save_target()
             
         ctk.CTkButton(f_c_center, text="Browse", image=self.icons['folder'], compound="left", command=browse_target, width=80).pack(side="left", padx=5, pady=10, anchor="center")
-        ctk.CTkButton(f_c_center, text="Move", image=self.icons['arrow'], compound="left", command=self.move_dupe, width=80).pack(side="left", pady=10, anchor="center")
+        ctk.CTkButton(f_c_center, text="Copy", image=self.icons['arrow'], compound="left", command=self.move_dupe, width=80).pack(side="left", pady=10, anchor="center")
         
         # Right controls
         f_c_right = ctk.CTkFrame(f_ctrl, fg_color="transparent")
@@ -1185,10 +1189,10 @@ class ReviewDialog:
         
         target_dir = self.target_var.get()
         if not target_dir or target_dir == 'Select Folder...' or not os.path.isdir(target_dir):
-            messagebox.showwarning("No Destination", "Please select a valid destination folder from the 'Move to:' dropdown first.")
+            messagebox.showwarning("No Destination", "Please select a valid destination folder from the copy destination dropdown first.")
             return
 
-        if not messagebox.askyesno("Move All", f"Are you sure you want to move all {len(self.pairs)} duplicates currently listed to:\n\n{target_dir}?"): return
+        if not messagebox.askyesno("Copy All", f"Are you sure you want to copy all {len(self.pairs)} duplicates currently listed to:\n\n{target_dir}?\n\nOriginal files will remain in place."): return
 
         target_path = Path(target_dir)
         self._save_target()
@@ -1220,7 +1224,7 @@ class ReviewDialog:
             self.undo_stack.append((operations, restore_index))
         self.current_index = len(self.pairs)
         self._load_pair()
-        messagebox.showinfo("Success", f"Moved {count} files to {target_dir}.")
+        messagebox.showinfo("Success", f"Copied {count} files to {target_dir}. Originals unchanged.")
 
     def _load_pair(self):
         if self.current_index >= len(self.pairs):
@@ -1783,6 +1787,10 @@ class DedupApp:
         self.pbar.set(0)
 
         self.journey_export_mode = tk.StringVar(value="Standard Mode")
+        _vault_init = (self.settings.get("last_dest") or "").strip()
+        if not _vault_init:
+            _vault_init = str((Path.home() / "Desktop" / "DedupSuite_Vault").resolve())
+        self.target_vault_dir = tk.StringVar(value=_vault_init)
 
         self._init_audit_tab()
         self._init_merge_tab()
@@ -1950,7 +1958,7 @@ class DedupApp:
         wrapped in :class:`CTkImage`, so references are retained on ``self`` to
         prevent garbage collection.
         """
-        header = ctk.CTkFrame(self.root, fg_color=BRAND_BLACK, corner_radius=0, height=66)
+        header = ctk.CTkFrame(self.root, fg_color=BRAND_BLACK, corner_radius=0, height=82)
         header.pack(side="top", fill="x")
         header.pack_propagate(False)
 
@@ -1962,9 +1970,15 @@ class DedupApp:
         self.header_status.pack(side="right", padx=18)
         self.header_status.bind("<Button-1>", lambda _e: self._show_rationalise_info())
 
+        brand_col = ctk.CTkFrame(header, fg_color="transparent")
+        brand_col.pack(side="left", padx=18, pady=8)
+        title_row = ctk.CTkFrame(brand_col, fg_color="transparent")
+        title_row.pack(anchor="w")
+
         # Preferred: official wordmark lockup image (SVG master or raster),
         # rendered once and cached at a header-friendly height.
         wordmark_source = self._resolve_brand_source("wordmark.svg", "wordmark.png")
+        wordmark_packed = False
         if wordmark_source:
             try:
                 target_h = 46
@@ -1976,29 +1990,36 @@ class DedupApp:
                 self._wordmark_img = self.get_branded_image(
                     wordmark_source, (int(target_h * ratio), target_h)
                 )
-                ctk.CTkLabel(header, image=self._wordmark_img, text="").pack(
-                    side="left", padx=18, pady=10
-                )
-                return
+                ctk.CTkLabel(title_row, image=self._wordmark_img, text="").pack(side="left")
+                wordmark_packed = True
             except Exception:
                 pass  # fall through to composed lockup
 
-        # Fallback: brand icon + wordmark text + cyan version badge.
-        icon_source = self._resolve_brand_source("icon.svg", "icon.png")
-        if icon_source:
-            try:
-                self._brand_icon_img = self.get_branded_image(icon_source, 42)
-                ctk.CTkLabel(header, image=self._brand_icon_img, text="").pack(
-                    side="left", padx=(18, 12), pady=12
-                )
-            except Exception:
-                pass
+        if not wordmark_packed:
+            # Fallback: brand icon + wordmark text + cyan version badge.
+            icon_source = self._resolve_brand_source("icon.svg", "icon.png")
+            if icon_source:
+                try:
+                    self._brand_icon_img = self.get_branded_image(icon_source, 42)
+                    ctk.CTkLabel(title_row, image=self._brand_icon_img, text="").pack(
+                        side="left", padx=(0, 12)
+                    )
+                except Exception:
+                    pass
+            ctk.CTkLabel(
+                title_row, text="DEDUP SUITE", font=("Segoe UI", 22, "bold"), text_color="#FFFFFF",
+            ).pack(side="left")
+            ctk.CTkLabel(
+                title_row, text="2.0", font=("Segoe UI", 13, "bold"), text_color=COLOR_INFO,
+            ).pack(side="left", padx=(8, 0), pady=(4, 0), anchor="n")
+
         ctk.CTkLabel(
-            header, text="DEDUP SUITE", font=("Segoe UI", 22, "bold"), text_color="#FFFFFF",
-        ).pack(side="left", pady=12)
-        ctk.CTkLabel(
-            header, text="2.0", font=("Segoe UI", 13, "bold"), text_color=COLOR_INFO,
-        ).pack(side="left", padx=(8, 0), pady=(16, 0), anchor="n")
+            brand_col,
+            text="YOUR DATA, YOUR FUTURE. LOCAL, VERIFIED AND IMMUTABLE.",
+            font=("Segoe UI", 11),
+            text_color="gray60",
+            anchor="w",
+        ).pack(anchor="w", pady=(2, 0))
 
     def log(self, msg):
         self.root.after(0, lambda: self._log_ui(msg))
@@ -2131,8 +2152,8 @@ class DedupApp:
         """Explain what Rationalisation does, in a small info pop-up."""
         messagebox.showinfo(
             "About Rationalisation",
-            "Identifies and categorises redundant vs. golden file versions "
-            "across your data mine, cryptographically linking legacy files to "
+            "Identifies and elevates Verified Golden Masters vs. legacy copies "
+            "across your vault index, cryptographically linking legacy files to "
             "their source.\n\n"
             "This runs in the background — you remain free to use DedupSuite "
             "while it works.",
@@ -2187,6 +2208,32 @@ class DedupApp:
         if chosen:
             self.src_var.set(chosen)
 
+    def _pick_destination_vault(self) -> None:
+        chosen = filedialog.askdirectory(title="Choose Destination Vault")
+        if chosen:
+            self.target_vault_dir.set(chosen)
+
+    def _require_destination_vault(self) -> Optional[str]:
+        """Resolve Destination Vault for export; warn if unset before Begin Rescue."""
+        raw = self.target_vault_dir.get().strip()
+        if not raw:
+            messagebox.showwarning(
+                "Destination Vault Required",
+                "Please select a Destination Vault in Step 1 before Begin Rescue.\n\n"
+                "Obsidian export must not write into your source folder.",
+            )
+            return None
+        try:
+            root = Path(raw)
+            root.mkdir(parents=True, exist_ok=True)
+            return str(root.resolve())
+        except OSError as exc:
+            messagebox.showerror(
+                "Destination Vault",
+                f"Could not create or access the Destination Vault path:\n{exc}",
+            )
+            return None
+
     def _bind_drop_target(self, widget: Any) -> None:
         """Best-effort folder drag-and-drop on Windows; click-to-browse always works."""
         widget.bind("<Button-1>", lambda _e: self._pick_source_folder())
@@ -2213,7 +2260,7 @@ class DedupApp:
         if not paths:
             empty = ctk.CTkLabel(
                 self.f_rescue_matrix,
-                text="Your rescued masters will appear here as the Identity Scanner runs.",
+                text="Verified Golden Masters will appear here as ingestion runs.",
                 font=FONT_CALM_SMALL,
                 text_color=COLOR_HINT,
                 wraplength=700,
@@ -2280,8 +2327,8 @@ class DedupApp:
             journey,
             1,
             CALM_STEP1_TITLE,
-            "Point DedupSuite at the folder or drive that feels overwhelming. "
-            "We will walk it gently — no cloud uploads.",
+            "Point DedupSuite at the source folder to ingest. "
+            "The Identity Scanner will discover Golden Files across the tree — no cloud uploads.",
             grid_row=0,
         )
         self.src_var = tk.StringVar(value=self.settings.get("last_source", ""))
@@ -2299,7 +2346,7 @@ class DedupApp:
         ).pack(expand=True)
         ctk.CTkLabel(
             self.drop_zone,
-            text="Choose the swamp you want to map",
+            text="Choose the folder to discover Golden Files",
             font=FONT_CALM_SMALL,
             text_color=COLOR_HINT,
         ).pack(pady=(0, 4))
@@ -2316,16 +2363,35 @@ class DedupApp:
             width=90, height=26, command=self._pick_source_folder,
         ).pack(side="left")
 
+        ctk.CTkLabel(
+            step1,
+            text="Destination Vault",
+            font=FONT_CALM_SMALL,
+            text_color=COLOR_HINT,
+            anchor="w",
+        ).pack(fill="x", pady=(JOURNEY_PADY, 0))
+        vault_row = ctk.CTkFrame(step1, fg_color="transparent")
+        vault_row.pack(fill="x", pady=JOURNEY_PADY)
+        ctk.CTkEntry(
+            vault_row, textvariable=self.target_vault_dir,
+            placeholder_text="Destination Vault path…",
+            height=26, font=FONT_CALM_SMALL,
+        ).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ctk.CTkButton(
+            vault_row, text="Browse", image=self.icons["folder"], compound="left",
+            width=90, height=26, command=self._pick_destination_vault,
+        ).pack(side="left")
+
         step2 = self._calm_step_frame(
             journey,
             2,
             CALM_STEP2_TITLE,
-            "Identity Scanner distills clutter into pristine master copies.",
+            "Identity Scanner elevates clutter into Verified Golden Masters.",
             grid_row=1,
         )
         self.lbl_rescue_progress = ctk.CTkLabel(
             step2,
-            text="Waiting to begin your rescue mission…",
+            text="Waiting to begin Golden File discovery and elevation…",
             font=FONT_CALM_SMALL,
             text_color=COLOR_INFO,
             anchor="w",
@@ -2342,7 +2408,7 @@ class DedupApp:
             journey,
             3,
             CALM_STEP3_TITLE,
-            "Pick how rescued masters are organised.",
+            "Choose how Golden Masters are organised before vault commit.",
             grid_row=2,
         )
         self.seg_export_mode = ctk.CTkSegmentedButton(
@@ -2427,13 +2493,13 @@ class DedupApp:
 
         self.m_dry = tk.BooleanVar(value=True)
         dry_cb = ctk.CTkCheckBox(
-            sec, text="Dry Run (simulate only — no files moved)",
+            sec, text="Dry Run (simulate only — no files copied)",
             variable=self.m_dry, font=FONT_BODY,
         )
         dry_cb.pack(anchor="w", pady=(6, 12))
         Tooltip(
             dry_cb,
-            "Preview exactly what would be merged without touching any files. "
+            "Preview exactly what would be merged without copying any files. "
             "Turn off only once you're satisfied with the simulation.",
         )
 
@@ -2529,31 +2595,31 @@ class DedupApp:
         danger_row = ctk.CTkFrame(self.f_danger_zone, fg_color="transparent")
         danger_row.pack(fill="x", padx=15, pady=(0, 12))
         self.btn_revert = ctk.CTkButton(
-            danger_row, text='Revert Last Archive', command=self.revert_last_archive,
+            danger_row, text='Revert Last Vault Commit', command=self.revert_last_archive,
             fg_color=COLOR_NEUTRAL, hover_color=COLOR_NEUTRAL_HOVER, height=36, font=FONT_BODY,
         )
         self.btn_revert.pack(side='left', padx=(0, 8))
-        Tooltip(self.btn_revert, "Undo the most recent bulk archive operation, restoring moved files to their original locations.")
+        Tooltip(self.btn_revert, "Undo the most recent vault commit, restoring copied vault records to their original locations.")
         self.btn_clear_log = ctk.CTkButton(
             danger_row, text='Clear Transaction Log', command=self.clear_archive_history,
             fg_color=COLOR_NEUTRAL, hover_color=COLOR_NEUTRAL_HOVER, height=36, font=FONT_BODY,
         )
         self.btn_clear_log.pack(side='left')
-        Tooltip(self.btn_clear_log, "Permanently delete the archive transaction history. Revert will no longer be possible afterwards.")
+        Tooltip(self.btn_clear_log, "Permanently delete the vault transaction history. Revert will no longer be possible afterwards.")
 
         # Summary card (top).
         f_card = ctk.CTkFrame(self.t_datamine)
         f_card.pack(side='top', fill="x", padx=20, pady=(15, 0))
 
-        ctk.CTkLabel(f_card, text="Data Mine Summary", font=FONT_TITLE).pack(
+        ctk.CTkLabel(f_card, text="Vault Index Summary", font=FONT_TITLE).pack(
             anchor="w", padx=15, pady=(14, 8)
         )
 
         stats = ctk.CTkFrame(f_card, fg_color="transparent")
         stats.pack(fill="x", padx=15, pady=(0, 10))
-        self.lbl_tot_files = ctk.CTkLabel(stats, text="Total Files Indexed: 0", font=FONT_BODY)
+        self.lbl_tot_files = ctk.CTkLabel(stats, text="Files Ingested: 0", font=FONT_BODY)
         self.lbl_tot_files.pack(anchor="w", pady=2)
-        self.lbl_golden = ctk.CTkLabel(stats, text="Total Unique (Golden) Files: 0", font=FONT_BODY)
+        self.lbl_golden = ctk.CTkLabel(stats, text="Verified Golden Masters: 0", font=FONT_BODY)
         self.lbl_golden.pack(anchor="w", pady=2)
         self.lbl_storage = ctk.CTkLabel(stats, text="Total Storage Used: 0 B", font=FONT_BODY)
         self.lbl_storage.pack(anchor="w", pady=2)
@@ -2566,20 +2632,38 @@ class DedupApp:
         self.btn_rationalize.pack(anchor="w", padx=15, pady=(0, 14))
         Tooltip(self.btn_rationalize, "Recompute which copy of each file is the 'golden' (kept) version and refresh the summary above.")
 
-        # Archive action card.
+        # Vault commit action card.
         f_archive = self._section(
-            self.t_datamine, "Bulk archive",
-            hint="Move every non-golden duplicate out to your archive location in one pass.",
+            self.t_datamine, "Commit to Vault",
+            hint="Safely copy legacy records into your vault location in one pass. Source files stay put.",
         )
         self.archive_dry_run_var = tk.BooleanVar(value=True)
         archive_dry_cb = ctk.CTkCheckBox(
-            f_archive, text="Dry Run (simulation mode — nothing is moved)",
-            variable=self.archive_dry_run_var, font=FONT_BODY,
+            f_archive,
+            text="Audit Validation (Safety First)",
+            variable=self.archive_dry_run_var,
+            font=FONT_BODY,
         )
-        archive_dry_cb.pack(anchor="w", pady=(0, 10))
-        Tooltip(archive_dry_cb, "Preview the archive plan without moving any files. Disable only when you're ready to commit.")
+        archive_dry_cb.pack(anchor="w", pady=(0, 4))
+        ctk.CTkLabel(
+            f_archive,
+            text=(
+                "We are careful with your data. Preview the exact structural changes "
+                "and generate a manifest. The engine is non-destructive: your original "
+                "files are NEVER moved or deleted."
+            ),
+            font=FONT_CALM_SMALL,
+            text_color=COLOR_HINT,
+            anchor="w",
+            justify="left",
+            wraplength=820,
+        ).pack(anchor="w", padx=(24, 0), pady=(0, 10))
+        Tooltip(
+            archive_dry_cb,
+            "Run Commit to Vault in validation mode first (recommended). Non-destructive: originals stay put.",
+        )
         ctk.CTkButton(
-            f_archive, text="Launch Bulk Archive (Safety First)", font=FONT_HEADER,
+            f_archive, text="Commit to Vault", font=FONT_HEADER,
             fg_color=COLOR_CAUTION, hover_color=COLOR_CAUTION_HOVER, command=self.execute_bulk_archive,
             height=42,
         ).pack(anchor="w")
@@ -2635,7 +2719,7 @@ class DedupApp:
 
                 def progress(done: int, total: int) -> None:
                     self._enqueue_log(
-                        f"Rationalising… classified {done:,}/{total:,} duplicate groups"
+                        f"Rationalising… classified {done:,}/{total:,} legacy groups"
                     )
 
                 DatabaseManager.classify_golden_versions(conn, progress=progress)
@@ -2665,12 +2749,12 @@ class DedupApp:
             self._toast(f"Rationalisation failed: {error}", kind="error")
             return
         self.update_datamine_stats()
-        self.log("Rationalisation complete. Data Mine Summary updated.")
+        self.log("Rationalisation complete. Vault Index Summary updated.")
 
     def update_datamine_stats(self):
         stats = self.db_manager.get_mine_stats()
-        self.lbl_tot_files.configure(text=f"Total Files Indexed: {stats['total_files']}")
-        self.lbl_golden.configure(text=f"Total Unique (Golden) Files: {stats['golden_files']}")
+        self.lbl_tot_files.configure(text=f"Files Ingested: {stats['total_files']}")
+        self.lbl_golden.configure(text=f"Verified Golden Masters: {stats['golden_files']}")
 
         self.lbl_storage.configure(
             text=f"Total Storage Used: {self._human_size(stats['total_storage'])}"
@@ -2685,7 +2769,7 @@ class DedupApp:
 
     def execute_bulk_archive(self):
         if getattr(self, 'current_session_id', None) is None:
-            messagebox.showwarning("No Session", "Please run an Audit first to establish a session for archiving.")
+            messagebox.showwarning("No Session", "Please run an ingest session on Your Journey before committing to the Vault.")
             return
             
         # 1. Ensure status column exists
@@ -2696,21 +2780,17 @@ class DedupApp:
             if 'status' not in columns:
                 self.db_manager.conn.execute("ALTER TABLE file_index ADD COLUMN status TEXT DEFAULT 'active'")
                 
-        # 2. Get target directory
-        target_dir = filedialog.askdirectory(title="Select Target Archive Folder")
-        if not target_dir:
-            return
-            
-        target_path = Path(target_dir)
-        
         # Strict Scope Lock: Get the current search directory
         active_path = self.src_var.get()
         if not active_path or not os.path.isdir(active_path):
-            messagebox.showwarning("No Source", "Please select a valid Source directory in the 'Audit / Dedup' tab to limit the archive scope.")
+            messagebox.showwarning("No Source", "Please select a valid source directory on Your Journey to limit the vault commit scope.")
             return
-            
-        
-        # 3. Query DB for duplicates
+
+        vault_manifest_root = self._require_destination_vault()
+        if vault_manifest_root is None:
+            return
+
+        # Query DB for legacy copies in this session
         with self.db_manager.conn:
             cur = self.db_manager.conn.cursor()
             
@@ -2722,36 +2802,43 @@ class DedupApp:
             records = cur.fetchall()
             
         if popup_count == 0 or not records:
-            messagebox.showinfo("Info", f"Found 0 files to archive within [{Path(active_path).name}] for this session.")
+            messagebox.showinfo("Info", f"Found 0 legacy copies to copy within [{Path(active_path).name}] for this session.")
             return
             
-        # 3. Pre-flight check
+        session_timestamp = time.strftime("%Y%m%d_%H%M%S")
+        isolation_path = (
+            Path(vault_manifest_root).resolve()
+            / "Isolated_Legacy_Copies"
+            / f"Session_{session_timestamp}"
+        )
+
+        # Pre-flight disk space check on the Destination Vault volume
         total_size = sum(r[2] or 0 for r in records)
-        free_space = shutil.disk_usage(target_path).free
-        
+        free_space = shutil.disk_usage(Path(vault_manifest_root).resolve()).free
+
         if free_space < total_size:
             req_gb = total_size / (1024**3)
             free_gb = free_space / (1024**3)
             messagebox.showerror("Error", f"Insufficient disk space!\n\nRequired: {req_gb:.2f} GB\nAvailable: {free_gb:.2f} GB")
             return
-            
+
         is_dry_run = self.archive_dry_run_var.get()
-        action_word = "simulate archiving" if is_dry_run else "archive"
-        
-        current_folder = Path(active_path).name
-        size_mb = total_size / (1024 * 1024)
-        msg = f"Found {popup_count} duplicates within [{current_folder}]. Total size: {size_mb:.2f} MB.\n\nReady to {action_word}. Proceed?"
-        if not messagebox.askyesno("Confirm Archive", msg):
+        msg = (
+            f"Found {popup_count} legacy copies. Verified Golden Masters remain in place.\n\n"
+            f"Ready to safely COPY records to the Vault at:\n{isolation_path}\n\n"
+            "Your original source files will remain completely untouched. Proceed?"
+        )
+        if not messagebox.askyesno("Confirm Commit to Vault", msg):
             return
-            
+
         # 4. UI Progress Setup
         archive_win = ctk.CTkToplevel(self.root)
-        archive_win.title("Bulk Archiving")
+        archive_win.title("Committing to Vault")
         archive_win.geometry("400x200")
         archive_win.transient(self.root)
         archive_win.grab_set()
         
-        ctk.CTkLabel(archive_win, text="Moving files to archive...", font=("Segoe UI", 14, "bold")).pack(pady=(20, 10))
+        ctk.CTkLabel(archive_win, text="Copying legacy records to the Vault...", font=("Segoe UI", 14, "bold")).pack(pady=(20, 10))
         pbar = ctk.CTkProgressBar(archive_win, width=300)
         pbar.pack(pady=10)
         pbar.set(0)
@@ -2770,35 +2857,32 @@ class DedupApp:
             moved_count = 0
             moved_size = 0
             
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            report_path = target_path / f"Archive_Manifest_{timestamp}.csv"
-            transaction_id = timestamp
+            report_path = Path(vault_manifest_root).resolve() / f"Archive_Manifest_{session_timestamp}.csv"
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            transaction_id = session_timestamp
 
             try:
+                if not is_dry_run:
+                    isolation_path.mkdir(parents=True, exist_ok=True)
+
                 for i, (rowid, fp_str, size, mtime) in enumerate(records):
                     if stop_archive.is_set(): break
                     src_path = Path(fp_str)
                     if not src_path.exists(): continue
                     try:
                         mtime_val = mtime if mtime else os.path.getmtime(src_path)
-                        date_str = time.strftime('%Y-%m-%d', time.localtime(mtime_val))
-                        dest_folder = target_path / f"{date_str}_Archive"
-                        
-                        if not is_dry_run:
-                            dest_folder.mkdir(parents=True, exist_ok=True)
-                        
-                        dest_file = dest_folder / src_path.name
+                        dest_file = isolation_path / src_path.name
                         counter = 2
                         while dest_file.exists() or str(dest_file) in simulated_moves:
-                            dest_file = dest_folder / f"{src_path.stem}_v{counter}{src_path.suffix}"
+                            dest_file = isolation_path / f"{src_path.stem}_v{counter}{src_path.suffix}"
                             counter += 1
                             
-                        status_str = "SIMULATED" if is_dry_run else "MOVED"
+                        status_str = "SIMULATED" if is_dry_run else "COPIED"
                         
                         if is_dry_run:
                             simulated_moves.add(str(dest_file))
                         else:
-                            shutil.move(str(src_path), str(dest_file))
+                            shutil.copy2(str(src_path), str(dest_file))
                             with self.db_manager.conn:
                                 self.db_manager.conn.execute("UPDATE file_index SET full_path = ?, status = 'archived', pre_archive_path = ?, archive_transaction_id = ? WHERE rowid = ?", (str(dest_file), str(src_path), transaction_id, rowid))
                         
@@ -2806,13 +2890,13 @@ class DedupApp:
                         csv_entries.append([status_str, src_path.name, str(src_path), str(dest_file), time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(mtime_val)), size_mb, transaction_id, self.current_session_id])
                         moved_count += 1
                         moved_size += (size or 0)
-                        status_verb = "Simulated" if is_dry_run else "Moved"
+                        status_verb = "Simulated copy" if is_dry_run else "Copied"
                         
                         if moved_count % 1000 == 0:
-                            self.log(f"Bulk Archive: {status_verb} {moved_count} files...")
+                            self.log(f"Commit to Vault: {status_verb} {moved_count} records...")
                             
                         self.root.after(0, lambda p=(i+1)/len(records), c=moved_count, t=len(records), v=status_verb: (pbar.set(p), lbl_status.configure(text=f"{v} {c} of {t} files...")))
-                    except Exception as e: self.log(f"Archive Error on {src_path.name}: {e}")
+                    except Exception as e: self.log(f"Vault commit error on {src_path.name}: {e}")
             finally:
                 if csv_entries:
                     try:
@@ -2823,17 +2907,21 @@ class DedupApp:
                     except Exception as e:
                         self.log(f"Could not create CSV manifest: {e}")
                     
-            action_done = "simulated" if is_dry_run else "archived"
-            msg = f"Successfully {action_done} {moved_count} files (Totaling {moved_size / (1024**3):.2f} GB)."
+            action_done = "simulated copying of" if is_dry_run else "copied"
+            msg = (
+                f"Successfully {action_done} {moved_count} records to the Vault "
+                f"(Totaling {moved_size / (1024**3):.2f} GB). "
+                "Your original source files remain untouched."
+            )
             if report_path.exists():
-                msg += f"\n\nReport saved to: {report_path.name}"
+                msg += f"\n\nManifest saved to:\n{report_path.resolve()}"
                 try:
                     if platform.system() == 'Windows': os.startfile(report_path)
                     elif platform.system() == 'Darwin': subprocess.call(['open', str(report_path)])
                     else: subprocess.call(['xdg-open', str(report_path)])
                 except: pass
             
-            self.root.after(0, lambda m=msg: [archive_win.destroy(), messagebox.showinfo("Archive Complete", m), self.update_datamine_stats()])
+            self.root.after(0, lambda m=msg: [archive_win.destroy(), messagebox.showinfo("Vault Commit Complete", m), self.update_datamine_stats()])
         threading.Thread(target=archive_task, daemon=True).start()
 
     def revert_last_archive(self):
@@ -2842,26 +2930,26 @@ class DedupApp:
             cur.execute("SELECT archive_transaction_id FROM file_index WHERE archive_transaction_id IS NOT NULL ORDER BY archive_transaction_id DESC LIMIT 1")
             res = cur.fetchone()
             if not res:
-                messagebox.showinfo("Info", "No recent archives found to revert.")
+                messagebox.showinfo("Info", "No recent vault commits found to revert.")
                 return
             last_tx_id = res[0]
             cur.execute("SELECT rowid, full_path, pre_archive_path FROM file_index WHERE archive_transaction_id = ?", (last_tx_id,))
             records = cur.fetchall()
 
         if not records:
-            messagebox.showinfo("Info", "No files found in the last archive transaction.")
+            messagebox.showinfo("Info", "No files found in the last vault commit transaction.")
             return
 
-        if not messagebox.askyesno("Confirm Revert", f"Are you sure you want to revert {len(records)} files from the previous archive?"):
+        if not messagebox.askyesno("Confirm Revert", f"Are you sure you want to revert {len(records)} files from the previous vault commit?"):
             return
 
         revert_win = ctk.CTkToplevel(self.root)
-        revert_win.title("Reverting Archive")
+        revert_win.title("Reverting Vault Commit")
         revert_win.geometry("400x200")
         revert_win.transient(self.root)
         revert_win.grab_set()
         
-        ctk.CTkLabel(revert_win, text="Moving files back...", font=("Segoe UI", 14, "bold")).pack(pady=(20, 10))
+        ctk.CTkLabel(revert_win, text="Restoring copies to original locations...", font=("Segoe UI", 14, "bold")).pack(pady=(20, 10))
         pbar = ctk.CTkProgressBar(revert_win, width=300)
         pbar.pack(pady=10)
         pbar.set(0)
@@ -2904,10 +2992,10 @@ class DedupApp:
         threading.Thread(target=revert_task, daemon=True).start()
 
     def clear_archive_history(self):
-        """Permanently clears the transaction log to save space and finalize archives."""
+        """Permanently clears the transaction log to save space and finalize vault commits."""
         if not messagebox.askyesno("Confirm Clear", 
-            "This will permanently forget where archived files came from.\n\n"
-            "The 'Revert' function will no longer work for past moves. Proceed?"):
+            "This will permanently forget where vaulted files came from.\n\n"
+            "The 'Revert' function will no longer work for past vault copies. Proceed?"):
             return
 
         try:
@@ -2925,6 +3013,10 @@ class DedupApp:
             messagebox.showerror("Error", f"Failed to clear history: {e}")
 
     def start_audit(self):
+        vault_export_root = self._require_destination_vault()
+        if vault_export_root is None:
+            return
+
         self.stop_event.clear()
         self.pause_event.set()
         self.btn_start.configure(state="disabled")
@@ -2971,7 +3063,7 @@ class DedupApp:
                 try:
                     kg_thread = threading.Thread(
                         target=self.export_knowledge_graph,
-                        args=(self.current_session_id, active_path),
+                        args=(self.current_session_id, active_path, vault_export_root),
                         daemon=True,
                     )
                     kg_thread.start()
@@ -2983,18 +3075,30 @@ class DedupApp:
                 if self.review_var.get():
                     groups, total = self.db_manager.get_duplicate_groups(scan_mode=self.mode_var.get(), threshold=self.settings.get('threshold', 0), limit=100, offset=0, session_id=self.current_session_id)
                     if local_count > 0:
-                        msg = f"Audit Complete. {local_count} duplicates found in this session. You can now Review manually or Launch Bulk Archive in the Data Mine tab."
-                        self.root.after(0, lambda m=msg: messagebox.showinfo("Audit Complete", m))
+                        msg = (
+                            f"Ingestion complete. {local_count} legacy copies identified in this session. "
+                            f"Verified Golden Masters are indexed. Review manually or Commit to Vault "
+                            f"in The Vault Index tab."
+                        )
+                        self.root.after(0, lambda m=msg: messagebox.showinfo("Ingestion Complete", m))
                     else:
-                        self.log("Scan complete. No session duplicates found.")
-                        self.root.after(0, lambda: messagebox.showinfo("Scan Complete", "No duplicates were found for this session."))
+                        self.log("Ingestion complete. Verified Golden Masters ready in The Vault Index.")
+                        self.root.after(0, lambda: messagebox.showinfo(
+                            "Ingestion Complete",
+                            "Ingestion complete. Verified Golden Masters are ready in The Vault Index.",
+                        ))
             except Exception as e:
                 self.log(f"Error during scan: {e}")
             finally:
                 self.root.after(0, self.reset_scan_buttons)
         threading.Thread(target=run, daemon=True).start()
 
-    def export_knowledge_graph(self, session_id: str, source_path: str) -> None:
+    def export_knowledge_graph(
+        self,
+        session_id: str,
+        source_path: str,
+        vault_export_root: Optional[str] = None,
+    ) -> None:
         """Export this session's unique files to Obsidian and cloud-anchor them.
 
         Thin GUI wrapper that delegates to :func:`export_knowledge_graph_core`
@@ -3002,10 +3106,19 @@ class DedupApp:
 
         Args:
             session_id: The audit session whose golden files should be exported.
-            source_path: The scanned source directory (export is written here).
+            source_path: The scanned source directory (metadata context only).
+            vault_export_root: Destination Vault root for ``Obsidian_Export`` (Step 1).
         """
+        export_root = vault_export_root or self._require_destination_vault()
+        if export_root is None:
+            return
         export_knowledge_graph_core(
-            self.db_manager, self.db_path, session_id, source_path, log=self.log
+            self.db_manager,
+            self.db_path,
+            session_id,
+            source_path,
+            log=self.log,
+            export_root=export_root,
         )
 
     def _show_review(self, groups, total, hash_cache):
@@ -3022,7 +3135,12 @@ class DedupApp:
     def on_close(self):
         self.stop_event.set() # Signal any running threads to stop
         self.pause_event.set() # Unpause to allow threads to exit
-        self.settings.update({"last_source": self.src_var.get(), "merge_master": self.m_master.get(), "merge_incoming": self.m_inc.get()})
+        self.settings.update({
+            "last_source": self.src_var.get(),
+            "last_dest": self.target_vault_dir.get(),
+            "merge_master": self.m_master.get(),
+            "merge_incoming": self.m_inc.get(),
+        })
         self.cfg.save(self.settings)
         self.db_manager.close()
         self.root.destroy()
@@ -3058,38 +3176,63 @@ class DedupApp:
 
     def check_updates(self):
         # Placeholder for update logic
-        messagebox.showinfo("Updates", "You are running the latest version (v1.1.1).")
+        messagebox.showinfo("Updates", f"You are running the latest version (v{APP_VERSION}).")
 
-    def create_shortcut(self):
+    def create_shortcut(self) -> None:
+        """Create a Windows desktop shortcut to this app (source or frozen exe)."""
+        if platform.system() != "Windows":
+            messagebox.showerror("Error", "Desktop shortcuts are only supported on Windows.")
+            return
         try:
-            desktop = os.path.join(os.environ['USERPROFILE'], 'Desktop')
-            lnk_path = os.path.join(desktop, "Dedup Suite.lnk")
-            
-            if getattr(sys, 'frozen', False):
-                target = sys.executable
-                args = ""
-                wdir = os.path.dirname(sys.executable)
+            desktop = Path(os.environ.get("USERPROFILE", str(Path.home()))) / "Desktop"
+            desktop.mkdir(parents=True, exist_ok=True)
+            lnk_path = str((desktop / "Dedup Suite.lnk").resolve())
+
+            if getattr(sys, "frozen", False):
+                target = str(Path(sys.executable).resolve())
+                arguments = ""
+                wdir = str(Path(sys.executable).resolve().parent)
             else:
-                target = sys.executable.replace("python.exe", "pythonw.exe")
-                args = f'"{os.path.abspath(__file__)}"'
-                wdir = os.path.dirname(os.path.abspath(__file__))
+                exe = Path(sys.executable)
+                pythonw = exe.with_name("pythonw.exe")
+                target = str((pythonw if pythonw.is_file() else exe).resolve())
+                arguments = str(Path(__file__).resolve())
+                wdir = str(Path(__file__).resolve().parent)
 
-            vbs = f'Set oWS = WScript.CreateObject("WScript.Shell")\n' \
-                  f'Set oLink = oWS.CreateShortcut("{lnk_path}")\n' \
-                  f'oLink.TargetPath = "{target}"\n' \
-                  f'oLink.Arguments = "{args}"\n' \
-                  f'oLink.WorkingDirectory = "{wdir}"\n' \
-                  f'oLink.Save'
-            
-            vbs_file = Path(tempfile.gettempdir()) / "mk_shortcut.vbs"
-            vbs_file.write_text(vbs)
-            subprocess.run(['cscript', '/nologo', str(vbs_file)], check=True)
-            vbs_file.unlink()
+            def _ps_quote(value: str) -> str:
+                return "'" + value.replace("'", "''") + "'"
+
+            ps_cmd = (
+                "$s = (New-Object -ComObject WScript.Shell).CreateShortcut("
+                f"{_ps_quote(lnk_path)}); "
+                f"$s.TargetPath = {_ps_quote(target)}; "
+                f"$s.Arguments = {_ps_quote(arguments)}; "
+                f"$s.WorkingDirectory = {_ps_quote(wdir)}; "
+                "$s.Save()"
+            )
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Sta",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    ps_cmd,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                stderr = (result.stderr or "").strip()
+                raise RuntimeError(stderr or f"PowerShell exited with code {result.returncode}")
             messagebox.showinfo("Success", "Shortcut created on Desktop!")
-        except Exception as e: messagebox.showerror("Error", f"Could not create shortcut: {e}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not create shortcut: {e}")
 
-    def report_bug(self):
-        messagebox.showinfo("Report Bug", "Please report any issues to support@example.com")
+    def report_bug(self) -> None:
+        webbrowser.open("mailto:support@adzeee.com")
 
     def reset_settings(self):
         if messagebox.askyesno("Reset Settings", "Are you sure you want to reset all settings to their defaults?"):
@@ -3100,6 +3243,36 @@ class DedupApp:
             self.ignore_folders_var.set(self.settings['ignore_folders'])
             messagebox.showinfo("Settings", "Settings reset to defaults. Click 'Save Settings' to persist changes.")
 
+def _obsidian_source_folder_label(source_path: str) -> str:
+    """Sanitised basename of the scanned source tree for vault nesting."""
+    return _sanitise(Path(source_path).resolve().name or "import")
+
+
+def _obsidian_year_bucket(record: UniqueFileRecord) -> str:
+    """Calendar year for yearly vault nesting (from file mtime when available)."""
+    try:
+        if record.path.exists():
+            return str(datetime.datetime.fromtimestamp(record.path.stat().st_mtime).year)
+    except OSError:
+        pass
+    return str(datetime.datetime.now().year)
+
+
+def _write_vault_map_of_content(
+    vault_source_root: Path,
+    source_label: str,
+    note_stems: List[str],
+) -> Path:
+    """Write ``_Index_[Source].md`` with wikilinks to every note stem in this export."""
+    vault_source_root.mkdir(parents=True, exist_ok=True)
+    index_path = vault_source_root / f"_Index_{source_label}.md"
+    unique_stems = sorted(set(note_stems))
+    lines = "\n".join(f"- [[{stem}]]" for stem in unique_stems)
+    body = f"# Map of Content: {source_label}\n\n{lines}\n"
+    index_path.write_text(body, encoding="utf-8")
+    return index_path
+
+
 def export_knowledge_graph_core(
     db_manager: DatabaseManager,
     db_path: str,
@@ -3108,7 +3281,7 @@ def export_knowledge_graph_core(
     log: Callable[[str], None] = print,
     *,
     export_root: Optional[Union[str, Path]] = None,
-    export_dirname: str = "Obsidian_Export",
+    export_dirname: str = "",
 ) -> None:
     """Render this session's unique files to Obsidian and cloud-anchor them.
 
@@ -3126,8 +3299,8 @@ def export_knowledge_graph_core(
         log: Callable used to surface human-readable progress messages.
         export_root: Absolute vault or folder root for Markdown export (overrides
             ``source_path`` when set).
-        export_dirname: Subfolder under ``export_root``; use ``""`` to write notes
-            directly into the vault root.
+        export_dirname: Optional nested segment under ``export_root``; when empty,
+            notes use ``[export_root]/[source_name]/[YYYY]/`` contextual nesting.
     """
     try:
         with db_manager.conn:
@@ -3154,16 +3327,34 @@ def export_knowledge_graph_core(
         ]
 
         if export_root is not None:
-            root = str(Path(export_root).resolve())
+            vault_base = Path(export_root).resolve()
         elif source_path and os.path.isdir(source_path):
-            root = source_path
+            vault_base = Path(source_path).resolve()
         else:
-            root = os.path.dirname(db_path)
-        translator = MarkdownTranslator(root, export_dirname=export_dirname)
-        result = translator.translate(records)
+            vault_base = Path(db_path).resolve().parent
+
+        source_label = _obsidian_source_folder_label(source_path)
+        vault_source_root = vault_base / source_label
+        if export_dirname:
+            vault_source_root = vault_source_root / export_dirname
+
+        by_year: Dict[str, List[UniqueFileRecord]] = defaultdict(list)
+        for record in records:
+            by_year[_obsidian_year_bucket(record)].append(record)
+
+        all_note_stems: List[str] = []
+        total_notes = 0
+        for year, year_records in sorted(by_year.items()):
+            year_root = vault_source_root / year
+            translator = MarkdownTranslator(year_root, export_dirname="")
+            result = translator.translate(year_records)
+            total_notes += len(result.note_paths)
+            all_note_stems.extend(note_path.stem for note_path in result.note_paths)
+
+        index_path = _write_vault_map_of_content(vault_source_root, source_label, all_note_stems)
         log(
-            f"Knowledge graph: wrote {len(result.note_paths)} notes and "
-            f"{len(result.index_paths)} folder indexes to {result.export_dir}."
+            f"Knowledge graph: wrote {total_notes} notes under "
+            f"{vault_source_root} (by year) and map-of-content {index_path}."
         )
 
         bridge = CloudNotaryBridge(logger=log)

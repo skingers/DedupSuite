@@ -16,7 +16,10 @@ At platform level, the system combines:
 The topology is intentionally multi-process and layered:
 
 1. **Presentation and orchestration layer (local GUI)**
-   - `dedup_suite.py` coordinates scan lifecycle, review flows, archive actions, and user prompts.
+   - `dedup_suite.py` implements the **Calm Journey** CustomTkinter shell: a three-step audit path (**Map the Swamp → Secure the Gold → Ignite Your Mind**), tabbed navigation (**Your Journey**, **Merge Folders**, **Expert Studio**, **The Vault Index**), and a fixed footer for background notes and progress.
+   - Step 3 export profile selection uses a native `CTkSegmentedButton` (`Standard Mode` / `Intelligence Mode`) bound to `journey_export_mode`, avoiding custom card widgets that previously conflicted with the grid layout manager.
+   - Window policy: `minsize(1100, 700)` for Windows taskbar compatibility under DPI scaling; maximization is deferred (`after(100, state('zoomed')`) until after widget construction.
+   - The layer coordinates scan lifecycle, review flows, archive actions, and user prompts without blocking on network or hashing work.
 2. **Processing layer (local worker threads)**
    - content hashing, media analysis, and duplicate grouping run in background threads.
 3. **State layer (local SQLite)**
@@ -27,6 +30,18 @@ The topology is intentionally multi-process and layered:
    - cloud-facing anchoring endpoint: `http://34.13.47.2:5000/api/v1/anchor`.
 
 This arrangement links a local dedup engine to an isolated Google Cloud Platform Micro VM backend, keeping interactive operations performant while segregating external network trust operations.
+
+### 2.1 Ingest engine (production mode)
+
+The cryptographic ingest path (`pipeline.py`, `ingest_kernel.py`, `db_ingest.py`) operates in **fully unrestricted production mode**:
+
+| Policy | Behaviour |
+|---|---|
+| Golden-file trial cap | **Removed.** `run_pipeline()` defaults to `trial_golden_limit=None`, so database ingest uses the concurrent producer/consumer pipeline and standard `insert_batch` commits. |
+| Discovery testing cap | **Removed.** `FileAuditor` and `VideoFileAuditor` enumerate the complete target directory via `os.walk` with no artificial file-count stop. |
+| Throughput | Eight producer workers hash files in batches of 64; a dedicated consumer connection signs manifests and commits under WAL. |
+
+Legacy trial helpers (`TRIAL_GOLDEN_LIMIT`, `assert_trial_capacity`) remain in `db_ingest.py` for API compatibility but do not enforce limits when the default pipeline path is used.
 
 ## 3. Security Architecture
 
@@ -68,7 +83,8 @@ DedupSuite uses cryptographic anchor hashing matrices to ensure local database i
 - SHA-256 hashes are the canonical identity for exact-match equivalence;
 - proof blobs and statuses are persisted in `blockchain_proofs` for replayable verification state;
 - dedup session metadata tracks temporal progression and rationalisation outcomes;
-- failure handling is designed to continue batch progression instead of halting entire pipelines.
+- failure handling is designed to continue batch progression instead of halting entire pipelines;
+- production scans are not terminated by artificial golden-file or discovery quotas—only explicit operator Stop/Pause, I/O errors, or integrity failures.
 
 Primary risk controls include:
 

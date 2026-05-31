@@ -2,7 +2,9 @@
 
 ## Document scope
 
-This architecture record defines DedupSuite 2.0 production behaviour: metadata-blackout naming, the **relational forensic ledger**, internal OpenTimestamps BLOB storage, and dual-profile vault export. It complements `README.md` and the implementation in `db_ingest.py`, `core/ots_proof.py`, and `run_production.py`.
+This architecture record defines DedupSuite 2.0 production behaviour: metadata-blackout naming, the **relational forensic ledger**, internal OpenTimestamps BLOB storage, and dual-profile vault export. It complements `README.md`, `TECHNICAL_ARCHITECTURE.md`, and the implementation in `db_ingest.py`, `core/ots_proof.py`, and `run_production.py`.
+
+**Operational context (v2.0 locked):** The Calm Journey GUI (`dedup_suite.py`) drives local audits without trial or discovery file caps. Ingest is unlimited via `run_pipeline(trial_golden_limit=None)` and full-tree `os.walk` discovery. Vault export semantics in this document apply to all golden rows produced by that unrestricted ingest path.
 
 ---
 

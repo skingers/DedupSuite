@@ -1,6 +1,6 @@
 # DedupSuite 2.0
 
-DedupSuite is a desktop-first deduplication and audit platform that combines high-throughput local scanning with cryptographic integrity guarantees and optional cloud notary anchoring. The application analyses file estates, indexes results in SQLite, identifies duplicate content, and supports controlled archival workflows through a review-friendly GUI.
+DedupSuite is a production-ready, desktop-first deduplication and audit platform that combines high-throughput local scanning with cryptographic integrity guarantees and optional cloud notary anchoring. The application analyses file estates, indexes results in SQLite, identifies duplicate content, and supports controlled archival workflows through a calm, operator-focused GUI built with CustomTkinter.
 
 ## Core Capabilities
 
@@ -9,6 +9,29 @@ DedupSuite is a desktop-first deduplication and audit platform that combines hig
 - **Session-aware indexing** — SQLite ledger with golden/legacy classification across audit sessions.
 - **Cryptographic integrity** — Ed25519-signed batch manifests for every ingest commit.
 - **Cloud notary anchoring** — Background OpenTimestamps submission via `core/notary.py`.
+- **Unrestricted production ingest** — No trial caps on golden-file classification or discovery; the concurrent pipeline processes entire directory trees.
+
+---
+
+## Calm Journey Interface (GUI)
+
+DedupSuite 2.0 ships a **Calm Journey** minimalist workflow in `dedup_suite.py`, designed for long scanning sessions on Windows hosts with display scaling:
+
+| Tab | Purpose |
+|---|---|
+| **Your Journey** | Three-step guided audit: map source folder, monitor rescue progress, choose export mode, and run **Begin Rescue** / Pause / Stop. |
+| **Merge Folders** | Consolidate incoming trees into a master archive. |
+| **Expert Studio** | Advanced scanner tuning (exact vs. visual/video, thresholds, ignore rules). |
+| **The Vault Index** | Golden/legacy statistics, rationalisation, and bulk archive controls. |
+
+**Step 3 — Ignite Your Mind** uses a native `CTkSegmentedButton` bound to `journey_export_mode` with values `Standard Mode` and `Intelligence Mode`. This replaces earlier custom-drawn mode cards for stable layout management.
+
+**Window architecture**
+
+- Minimum size: **1100 × 700** pixels — preserves taskbar clearance on scaled Windows displays.
+- After UI construction, maximization is applied via deferred OS state: `root.after(100, lambda: root.state('zoomed'))`.
+
+The journey layout uses tight vertical spacing constants (`JOURNEY_PADY`, `STEP3_RUN_GAP`) so controls, the background activity log, and progress bar remain visible when maximized.
 
 ---
 
@@ -26,7 +49,7 @@ pip install -r requirements.txt
 python dedup_suite.py
 ```
 
-In the application, select a source directory and run **Audit / Dedup** (Exact or Visual/Video mode). Results are written to `data_mine.db` in the application directory. Runtime artefacts (`data_mine.db`, `logs/`, `settings.json`) are gitignored and created on first use.
+In the application, open **Your Journey**, choose a source folder in Step 1, select **Standard Mode** or **Intelligence Mode** in Step 3, and click **Begin Rescue**. Configure exact vs. visual/video scanning under **Expert Studio** when needed. Results are written to `data_mine.db` in the application directory. Runtime artefacts (`data_mine.db`, `logs/`, `settings.json`) are gitignored and created on first use.
 
 ### Headless pipeline smoke test
 
@@ -112,6 +135,8 @@ The ingest path (`pipeline.py` + `ingest_kernel.py`) separates CPU-bound hashing
 ```
 
 **Design goals:** maximise throughput on multi-core hosts, keep the GUI responsive during large audits, and ensure every database commit is atomic with its cryptographic proof.
+
+**Production ingest policy:** `run_pipeline()` defaults to `trial_golden_limit=None`, routing all database-backed audits through the concurrent producer/consumer path with `insert_batch`. There is no artificial stop at 1,000 golden files and no discovery testing cap — `FileAuditor` and `VideoFileAuditor` walk the full target tree (subject only to user Stop/Pause and ignore rules).
 
 #### Production vault export, forensic ledger & export profiles
 
@@ -216,7 +241,7 @@ A passing scan (`IntegrityCheck.scan() == True`) confirms that every committed i
 
 | Path | Role |
 |---|---|
-| `dedup_suite.py` | GUI application and orchestration |
+| `dedup_suite.py` | Calm Journey GUI, `FileAuditor` / `VideoFileAuditor`, and orchestration |
 | `pipeline.py` | Producer/consumer concurrent ingest |
 | `ingest_kernel.py` | Per-file streaming SHA-256 worker |
 | `db_ingest.py` | SQLite batch writes, vault export, and naming fallback |
@@ -231,7 +256,7 @@ A passing scan (`IntegrityCheck.scan() == True`) confirms that every committed i
 | `network/` | Remote notary bridge |
 | `tests/` | Unit and integration tests |
 
-See `TECHNICAL_ARCHITECTURE.md` for deployment topology, security boundaries, and operational protocols.
+See `TECHNICAL_ARCHITECTURE.md` for deployment topology, presentation-layer constraints, security boundaries, and operational protocols.
 
 ---
 
