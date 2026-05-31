@@ -1740,14 +1740,20 @@ class DedupApp:
         # Dark-foreground icon variant for use on bright (brand cyan) fills.
         self.icons_dark = IconFactory.create_icons(color=COLOR_ON_INFO)
 
+        self.root.grid_rowconfigure(0, weight=1)
+        self.root.grid_rowconfigure(1, weight=0)
+        self.root.grid_rowconfigure(2, weight=0)
+        self.root.grid_rowconfigure(3, weight=0)
+        self.root.grid_columnconfigure(0, weight=1)
+
         self.nb = ctk.CTkTabview(self.root)
-        self.nb.pack(fill="both", expand=True)
+        self.nb.grid(row=0, column=0, sticky="nsew", padx=8, pady=(8, 0))
 
         self.t_vault = self.nb.add("Vault Elevation")
         self.t_pro = self.nb.add("Pro Studio")
-        
+
         f_log = ctk.CTkFrame(self.root, fg_color="transparent")
-        f_log.pack(fill="x", padx=20, pady=(10, 5))
+        f_log.grid(row=1, column=0, sticky="ew", padx=20, pady=(10, 5))
         ctk.CTkLabel(f_log, text="Background notes:").pack(side="left", padx=5)
         ctk.CTkButton(f_log, text="Clear Log", image=self.icons['trash'], compound="left", fg_color="gray", command=self.clear_log, width=100).pack(side="right")
         self.btn_save_log = ctk.CTkButton(
@@ -1755,11 +1761,11 @@ class DedupApp:
             fg_color="gray", command=self.save_log, width=100,
         )
         self.btn_save_log.pack(side="right", padx=10)
-        
+
         self.log_area = ctk.CTkTextbox(self.root, height=150)
-        self.log_area.pack(fill="x", padx=20, pady=(0, 10))
+        self.log_area.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 10))
         self.pbar = ctk.CTkProgressBar(self.root)
-        self.pbar.pack(fill="x", padx=20, pady=(0, 20))
+        self.pbar.grid(row=3, column=0, sticky="ew", padx=20, pady=(0, 20))
         self.pbar.set(0)
 
         self.journey_export_mode = tk.StringVar(
@@ -2442,14 +2448,55 @@ class DedupApp:
             cur.execute(sql, (session_id,))
             return cur.fetchall()
 
-    def _resolve_vault_dest(
+    def _fetch_session_golden_records(self, session_id: str) -> List[Tuple[Any, ...]]:
+        sql = (
+            "SELECT rowid, full_path, file_size, modified_time FROM file_index "
+            "WHERE is_golden = 1 AND last_session_id = ? AND sha256_hash IS NOT NULL"
+        )
+        with self.db_manager.conn:
+            cur = self.db_manager.conn.cursor()
+            cur.execute(sql, (session_id,))
+            return cur.fetchall()
+
+    def _write_vault_asset_index_only(
+        self,
+        vault_source_root: Path,
+        source_label: str,
+        asset_relpaths: Sequence[str],
+    ) -> Path:
+        """Write only ``_Index_[Source].md`` — no per-file Markdown sidecars."""
+        vault_source_root.mkdir(parents=True, exist_ok=True)
+        index_path = vault_source_root / f"_Index_{source_label}.md"
+        unique_paths = sorted(set(asset_relpaths))
+        lines = "\n".join(f"- `{rel}`" for rel in unique_paths)
+        body = (
+            f"# Map of Content: {source_label}\n\n"
+            "Vaulted binary assets (original extensions preserved):\n\n"
+            f"{lines}\n"
+        )
+        index_path.write_text(body, encoding="utf-8")
+        return index_path
+
+    def _resolve_vault_asset_dest(
         self,
         src_path: Path,
-        isolation_path: Path,
+        vault_source_root: Path,
         reserved: set,
         collision_policy: str,
     ) -> Optional[Path]:
-        dest_file = isolation_path / src_path.name
+        year_dir = vault_source_root / _obsidian_year_bucket(
+            UniqueFileRecord(path=src_path, file_hash=""),
+        )
+        return self._resolve_vault_dest(src_path, year_dir, reserved, collision_policy)
+
+    def _resolve_vault_dest(
+        self,
+        src_path: Path,
+        dest_dir: Path,
+        reserved: set,
+        collision_policy: str,
+    ) -> Optional[Path]:
+        dest_file = dest_dir / src_path.name
         policy = (collision_policy or "skip").lower()
         if policy == "skip":
             if dest_file.exists() or str(dest_file) in reserved:
@@ -2566,18 +2613,9 @@ class DedupApp:
             else:
                 self.log("Notarisation skipped (disabled in Pro Studio).")
 
-            vault_export_root = str(Path(vault_path).resolve())
-            try:
-                kg_thread = threading.Thread(
-                    target=self.export_knowledge_graph,
-                    args=(self.current_session_id, source_path, vault_export_root),
-                    daemon=True,
-                )
-                kg_thread.start()
-            except Exception as exc:
-                self.log(f"Knowledge graph export failed to start: {exc}")
-
             self._ensure_file_index_status_column()
+            source_label = _obsidian_source_folder_label(source_path)
+            vault_source_root = Path(vault_path).resolve() / source_label
             records = self._fetch_session_legacy_records(self.current_session_id)
             session_timestamp = time.strftime("%Y%m%d_%H%M%S")
             transaction_id = session_timestamp
@@ -2611,9 +2649,15 @@ class DedupApp:
                 self.root.after(0, self.update_datamine_stats)
                 return
 
-            if not records:
-                self.log("No legacy copies to copy for this session; elevation finished.")
+            golden_records = self._fetch_session_golden_records(self.current_session_id)
+            if not golden_records:
+                self.log("No golden masters to vault for this session; elevation finished.")
                 self._set_elevation_status("Elevation Complete")
+                try:
+                    index_path = self._write_vault_asset_index_only(vault_source_root, source_label, [])
+                    self.log(f"Vault index written: {index_path.resolve()}")
+                except OSError as exc:
+                    self.log(f"Could not write vault index: {exc}")
                 try:
                     self._open_path_in_explorer(vault_root)
                     self.log(f"Opened vault destination: {vault_root}")
@@ -2622,7 +2666,7 @@ class DedupApp:
                 self.root.after(0, self.update_datamine_stats)
                 return
 
-            total_size = sum(r[2] or 0 for r in records)
+            total_size = sum(r[2] or 0 for r in golden_records)
             try:
                 free_space = shutil.disk_usage(vault_root).free
             except OSError as exc:
@@ -2652,24 +2696,24 @@ class DedupApp:
                 return
 
             self._set_elevation_status("Executing non-destructive vault copy…")
-            isolation_path.mkdir(parents=True, exist_ok=True)
-            copy_fn = self._shutil_copy_from_config()
+            vault_source_root.mkdir(parents=True, exist_ok=True)
             csv_entries: List[List[Any]] = []
             reserved_exec: set = set()
             copied_count = 0
             copied_size = 0
             aborted = False
+            vaulted_relpaths: List[str] = []
 
-            for i, (rowid, fp_str, size, mtime) in enumerate(records):
+            for i, (rowid, fp_str, size, mtime) in enumerate(golden_records):
                 if self.stop_event.is_set():
                     aborted = True
                     self.log("Aborted by User.")
                     break
                 src_path = Path(fp_str)
-                if not src_path.exists():
+                if not src_path.is_file():
                     continue
-                dest_file = self._resolve_vault_dest(
-                    src_path, isolation_path, reserved_exec, collision_policy,
+                dest_file = self._resolve_vault_asset_dest(
+                    src_path, vault_source_root, reserved_exec, collision_policy,
                 )
                 if dest_file is None:
                     csv_entries.append([
@@ -2689,20 +2733,19 @@ class DedupApp:
                         aborted = True
                         self.log("Aborted by User.")
                         break
+                    dest_file.parent.mkdir(parents=True, exist_ok=True)
                     mtime_val = mtime if mtime else os.path.getmtime(src_path)
-                    copy_fn(str(src_path), str(dest_file))
-                    with self.db_manager.conn:
-                        self.db_manager.conn.execute(
-                            "UPDATE file_index SET full_path = ?, status = 'archived', "
-                            "pre_archive_path = ?, archive_transaction_id = ? WHERE rowid = ?",
-                            (str(dest_file), str(src_path), transaction_id, rowid),
-                        )
+                
+                final_dest_path = os.path.join(str(dest_file.parent), os.path.basename(str(src_path)))
+                shutil.copy2(str(src_path), final_dest_path)
+                rel = Path(final_dest_path).relative_to(vault_source_root).as_posix()
+                    vaulted_relpaths.append(rel)
                     size_mb = f"{(size or 0) / (1024 * 1024):.2f}"
                     csv_entries.append([
                         "COPIED",
                         src_path.name,
                         str(src_path),
-                        str(dest_file),
+                    final_dest_path,
                         time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime_val)),
                         size_mb,
                         transaction_id,
@@ -2712,7 +2755,7 @@ class DedupApp:
                     copied_size += (size or 0)
                     if copied_count % 500 == 0:
                         self.log(f"Vault copy: {copied_count} file(s) copied…")
-                    self.progress(i + 1, len(records), f"Copying {src_path.name}")
+                    self.progress(i + 1, len(golden_records), f"Copying {src_path.name}")
                 except Exception as exc:
                     self.log(f"Vault copy error on {src_path.name}: {exc}")
 
@@ -2724,8 +2767,16 @@ class DedupApp:
                 self.root.after(0, self.update_datamine_stats)
                 return
 
+            try:
+                index_path = self._write_vault_asset_index_only(
+                    vault_source_root, source_label, vaulted_relpaths,
+                )
+                self.log(f"Vault index written: {index_path.resolve()}")
+            except OSError as exc:
+                self.log(f"Could not write vault index: {exc}")
+
             self.log(
-                f"Elevation succeeded: {copied_count} record(s) copied "
+                f"Elevation succeeded: {copied_count} binary asset(s) copied "
                 f"({copied_size / (1024 ** 3):.2f} GB). Manifest: {report_path.resolve()}"
             )
             self.log("Original source files remain untouched (non-destructive copy2).")
