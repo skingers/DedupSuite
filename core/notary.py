@@ -67,46 +67,13 @@ class DedupNotary:
             if not target_hashes:
                 return
 
-            try:
-                from opentimestamps.core.op import OpSHA256
-                from opentimestamps.core.timestamp import Timestamp, DetachedTimestampFile
-                from opentimestamps.core.serialize import BytesSerializationContext
-                from opentimestamps.calendar import RemoteCalendar
-            except ImportError as exc:  # pragma: no cover - depends on runtime install state
-                print(f"[NOTARY] OpenTimestamps import failed: {exc}", file=sys.stderr)
-                return
-
-            def _build_proof(hash_bytes: bytes) -> bytes:
-                """Stamp a pre-computed SHA-256 digest and return the OTS proof.
-
-                Builds a detached timestamp from the raw 32-byte digest, submits
-                it to the public calendar pool (merging every successful reply),
-                and serialises the resulting proof. Raises if no calendar accepts
-                the timestamp so the caller can keep the hash ``PENDING``.
-                """
-                detached = DetachedTimestampFile(OpSHA256(), Timestamp(hash_bytes))
-                submitted = False
-                for url in self.CALENDAR_URLS:
-                    try:
-                        calendar = RemoteCalendar(url)
-                        calendar_timestamp = calendar.submit(
-                            detached.timestamp.msg, timeout=self.CALENDAR_TIMEOUT
-                        )
-                        detached.timestamp.merge(calendar_timestamp)
-                        submitted = True
-                    except Exception as cal_exc:
-                        print(f"[NOTARY] Calendar {url} unavailable: {cal_exc}", file=sys.stderr)
-                        continue
-                if not submitted:
-                    raise RuntimeError("no calendar accepted the timestamp")
-                ctx = BytesSerializationContext()
-                detached.serialize(ctx)
-                return ctx.getbytes()
+            from core.ots_proof import build_opentimestamps_proof
 
             for file_hash in target_hashes:
                 try:
-                    hash_bytes = bytes.fromhex(file_hash)
-                    proof_blob = _build_proof(hash_bytes)
+                    proof_blob, ots_error = build_opentimestamps_proof(file_hash)
+                    if proof_blob is None:
+                        raise RuntimeError(ots_error or "OTS proof generation failed")
 
                     # Never persist a blank proof under a 'SUBMITTED' status; an
                     # empty serialisation means the timestamp carries no calendar

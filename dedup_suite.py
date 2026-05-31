@@ -119,12 +119,22 @@ class ConfigManager:
 class DatabaseManager:
     """SQLite ledger for indexed files, golden/legacy status, and session metadata."""
 
-    def __init__(self, db_name: str = "data_mine.db") -> None:
-        if getattr(sys, 'frozen', False):
+    def __init__(
+        self,
+        db_name: str = "data_mine.db",
+        *,
+        db_path: Optional[Union[str, Path]] = None,
+    ) -> None:
+        if db_path is not None:
+            resolved = Path(db_path).expanduser().resolve()
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            self.db_path = str(resolved)
+        elif getattr(sys, 'frozen', False):
             base_path = os.path.dirname(sys.executable)
+            self.db_path = os.path.join(base_path, db_name)
         else:
             base_path = os.path.dirname(os.path.abspath(__file__))
-        self.db_path = os.path.join(base_path, db_name)
+            self.db_path = os.path.join(base_path, db_name)
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.execute("PRAGMA foreign_keys = ON;")
         # busy_timeout first so any residual contention waits politely instead
@@ -167,6 +177,14 @@ class DatabaseManager:
                 self.conn.execute("ALTER TABLE file_index ADD COLUMN last_session_id TEXT")
             except sqlite3.OperationalError:
                 pass
+            for col, ddl in (
+                ("is_golden", "INTEGER DEFAULT 0"),
+                ("ots_proof", "BLOB"),
+            ):
+                cur = self.conn.execute("PRAGMA table_info(file_index)")
+                columns = {info[1] for info in cur.fetchall()}
+                if col not in columns:
+                    self.conn.execute(f"ALTER TABLE file_index ADD COLUMN {col} {ddl}")
 
     def register_device(self, device_id: str, device_name: Optional[str] = None) -> None:
         """Ensure a row exists in ``devices`` for ``device_id``.
@@ -2947,6 +2965,9 @@ def export_knowledge_graph_core(
     session_id: str,
     source_path: str,
     log: Callable[[str], None] = print,
+    *,
+    export_root: Optional[Union[str, Path]] = None,
+    export_dirname: str = "Obsidian_Export",
 ) -> None:
     """Render this session's unique files to Obsidian and cloud-anchor them.
 
@@ -2960,8 +2981,12 @@ def export_knowledge_graph_core(
         db_manager: Open ledger connection wrapper.
         db_path: Path to the SQLite database (used as a fallback export root).
         session_id: The audit session whose golden files should be exported.
-        source_path: The scanned source directory (export is written here).
+        source_path: The scanned source directory (used when ``export_root`` is omitted).
         log: Callable used to surface human-readable progress messages.
+        export_root: Absolute vault or folder root for Markdown export (overrides
+            ``source_path`` when set).
+        export_dirname: Subfolder under ``export_root``; use ``""`` to write notes
+            directly into the vault root.
     """
     try:
         with db_manager.conn:
@@ -2987,8 +3012,13 @@ def export_knowledge_graph_core(
             for full_path, sha256_hash in rows
         ]
 
-        export_root = source_path if source_path and os.path.isdir(source_path) else os.path.dirname(db_path)
-        translator = MarkdownTranslator(export_root)
+        if export_root is not None:
+            root = str(Path(export_root).resolve())
+        elif source_path and os.path.isdir(source_path):
+            root = source_path
+        else:
+            root = os.path.dirname(db_path)
+        translator = MarkdownTranslator(root, export_dirname=export_dirname)
         result = translator.translate(records)
         log(
             f"Knowledge graph: wrote {len(result.note_paths)} notes and "
@@ -3034,12 +3064,16 @@ def run_headless(args: argparse.Namespace) -> int:
     def log(message: str) -> None:
         print(f"[DEDUP] {message}", flush=True)
 
-    target = os.path.abspath(args.target)
+    source = getattr(args, "source", None) or args.target
+    target = os.path.abspath(source)
     if not os.path.isdir(target):
-        print(f"[DEDUP] ERROR: target is not a directory: {target}", file=sys.stderr, flush=True)
+        print(f"[DEDUP] ERROR: source is not a directory: {target}", file=sys.stderr, flush=True)
         return 2
 
-    db_manager = DatabaseManager()
+    if args.db:
+        db_manager = DatabaseManager(db_path=Path(args.db).expanduser().resolve())
+    else:
+        db_manager = DatabaseManager()
     try:
         session_id = str(uuid.uuid4())
         log(f"Headless audit starting on: {target} (session {session_id})")
@@ -3065,7 +3099,20 @@ def run_headless(args: argparse.Namespace) -> int:
         log(f"Audit complete. Golden/legacy stats: {stats}")
 
         if args.export:
-            export_knowledge_graph_core(db_manager, db_manager.db_path, session_id, target, log=log)
+            export_root = None
+            export_dirname = "Obsidian_Export"
+            if args.destination:
+                export_root = os.path.abspath(args.destination)
+                export_dirname = ""
+            export_knowledge_graph_core(
+                db_manager,
+                db_manager.db_path,
+                session_id,
+                target,
+                log=log,
+                export_root=export_root,
+                export_dirname=export_dirname,
+            )
         else:
             log("Knowledge graph export skipped (--no-export).")
 
@@ -3104,7 +3151,26 @@ def main(argv: Optional[List[str]] = None) -> None:
         "target",
         nargs="?",
         default=None,
-        help="Directory to audit. Supplying this triggers headless (no-GUI) mode.",
+        help="Source directory to audit (headless). Alias: --source.",
+    )
+    parser.add_argument(
+        "--source",
+        dest="source",
+        default=None,
+        metavar="DIR",
+        help="Absolute path to raw files to audit (headless). Overrides positional target.",
+    )
+    parser.add_argument(
+        "--destination",
+        default=None,
+        metavar="DIR",
+        help="Absolute path to the Obsidian vault for knowledge-graph export.",
+    )
+    parser.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Absolute path to the production SQLite database file.",
     )
     parser.add_argument(
         "--headless",
@@ -3142,14 +3208,18 @@ def main(argv: Optional[List[str]] = None) -> None:
     )
     args = parser.parse_args(argv)
 
-    headless = args.target is not None or args.headless
+    for label, value in (("source", args.source), ("destination", args.destination), ("db", args.db)):
+        if value is not None and not Path(value).expanduser().is_absolute():
+            parser.error(f"--{label} must be an absolute path (got: {value!r})")
+
+    headless = args.target is not None or args.source is not None or args.headless
     if not headless:
         app = DedupApp()
         app.root.mainloop()
         return
 
-    if args.target is None:
-        parser.error("--headless requires a target directory to audit.")
+    if args.target is None and args.source is None:
+        parser.error("Headless mode requires --source or a positional source directory.")
 
     sys.exit(run_headless(args))
 

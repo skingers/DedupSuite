@@ -1,0 +1,21 @@
+{
+  "name": "dedupsuite-integration",
+  "version": "2.0.0",
+  "private": true,
+  "description": "DedupSuite 2.0 Obsidian bridge",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "builtin-modules": "^4.0.0",
+    "esbuild": "^0.24.0",
+    "obsidian": "^1.7.2",
+    "typescript": "^5.7.2"
+  },
+  "dependencies": {
+    "sql.js": "^1.12.0",
+    "tweetnacl": "^1.0.3"
+  }
+}

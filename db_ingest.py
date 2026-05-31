@@ -11,15 +11,17 @@ from __future__ import annotations
 
 import datetime
 import hashlib
-import json
 import re
 import shutil
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, List, Literal, Optional, Sequence, Tuple
 
-from network.notary_bridge import AnchorResult, CloudNotaryBridge
+from core.ots_proof import build_opentimestamps_proof
+
+ExportMode = Literal["standard", "plm", "obsidian"]
+EXPORT_MODES: tuple[str, ...] = ("standard", "plm", "obsidian")
 
 Row = Tuple[Path, dict]
 
@@ -49,7 +51,23 @@ _FILE_INDEX_COLUMN_MIGRATIONS: tuple[str, ...] = (
     "status TEXT DEFAULT 'active'",
     "pre_archive_path TEXT",
     "archive_transaction_id INTEGER",
+    "ots_proof BLOB",
 )
+
+
+def normalize_export_mode(mode: str) -> ExportMode:
+    """Validate CLI / API export mode strings."""
+    normalized = (mode or "standard").strip().lower()
+    if normalized not in EXPORT_MODES:
+        raise ValueError(
+            f"export_mode must be one of {', '.join(EXPORT_MODES)} (got {mode!r})"
+        )
+    return normalized  # type: ignore[return-value]
+
+
+def export_mode_writes_sidecars(mode: ExportMode) -> bool:
+    """Return True when markdown sidecars should be written to the vault."""
+    return mode in ("plm", "obsidian")
 
 
 def ensure_file_index_schema(conn: sqlite3.Connection) -> None:
@@ -244,11 +262,25 @@ class GoldenExportRow:
 
 
 @dataclass
+class OtsStampResult:
+    """Outcome of an OpenTimestamps stamp for one golden file."""
+
+    proof_blob: Optional[bytes]
+    error: Optional[str] = None
+
+    @property
+    def ok(self) -> bool:
+        return bool(self.proof_blob)
+
+
+@dataclass
 class VaultExportResult:
     """Summary returned by :func:`export_golden_vault`."""
 
+    export_mode: ExportMode = "standard"
     notes_written: int = 0
     assets_copied: int = 0
+    proofs_persisted: int = 0
     anchored: int = 0
     pending: int = 0
     note_paths: List[Path] = field(default_factory=list)
@@ -424,42 +456,45 @@ def copy_source_asset(source: Path, destination: Path) -> None:
     shutil.copy2(source, destination)
 
 
-def resolve_notary_status(outcome: AnchorResult) -> str:
-    """Map gateway outcome to vault frontmatter status."""
-    if outcome.ok:
-        return "ANCHORED"
-    return "PENDING"
+def resolve_notary_status(ots: OtsStampResult) -> str:
+    """Map OTS stamp outcome to vault frontmatter status."""
+    return "ANCHORED" if ots.ok else "PENDING"
 
 
-def _format_receipt_yaml(outcome: AnchorResult) -> str:
-    receipt = {
-        "gateway_status": outcome.status,
-        "attempts": outcome.attempts,
-        "payload": outcome.payload,
-        "response": outcome.response,
-        "error": outcome.error,
-    }
-    lines = ["notary_receipt:"]
-    for key, value in receipt.items():
-        if value is None:
-            continue
-        if isinstance(value, (dict, list)):
-            encoded = json.dumps(value, sort_keys=True)
-            lines.append(f"  {key}: {encoded}")
-        else:
-            lines.append(f'  {key}: "{_yaml_escape(str(value))}"')
-    return "\n".join(lines)
+def stamp_ots_proof(file_hash: str) -> OtsStampResult:
+    """Build an OpenTimestamps proof for ``file_hash`` (never written to disk)."""
+    proof_blob, error = build_opentimestamps_proof(file_hash)
+    return OtsStampResult(proof_blob=proof_blob, error=error)
+
+
+def persist_file_index_ots_proof(
+    conn: sqlite3.Connection,
+    row: GoldenExportRow,
+    proof_blob: Optional[bytes],
+) -> None:
+    """Store the raw OTS proof bytes on the golden ``file_index`` row."""
+    conn.execute(
+        """
+        UPDATE file_index
+        SET ots_proof = ?
+        WHERE full_path = ?
+          AND sha256_hash = ?
+          AND is_golden = 1
+        """,
+        (sqlite3.Binary(proof_blob) if proof_blob else None, str(row.full_path), row.file_hash),
+    )
 
 
 def render_vault_note(
     row: GoldenExportRow,
     *,
-    outcome: AnchorResult,
+    ots: OtsStampResult,
     created_iso: str,
     embed_name: str = "",
 ) -> str:
-    """Build markdown with resolved notary status and gateway receipt block."""
-    status = resolve_notary_status(outcome)
+    """Build markdown sidecar for PLM/Obsidian export (proof lives in SQLite only)."""
+    status = resolve_notary_status(ots)
+    proof_bytes = len(ots.proof_blob) if ots.proof_blob else 0
     frontmatter = (
         "---\n"
         f'file_hash: "{row.file_hash}"\n'
@@ -467,48 +502,21 @@ def render_vault_note(
         f'original_name: "{_yaml_escape(row.file_name)}"\n'
         f'created: "{created_iso}"\n'
         f'notary_status: "{status}"\n'
-        f"{_format_receipt_yaml(outcome)}\n"
+        f"ots_proof_bytes: {proof_bytes}\n"
+        f'ots_proof_storage: "file_index.ots_proof"\n'
         "---\n"
     )
     body = (
         f"\n# {row.file_name}\n\n"
         f"- **SHA-256:** `{row.file_hash}`\n"
         f"- **Notary:** {status}\n"
+        f"- **OTS proof:** stored in forensic ledger ({proof_bytes} bytes)\n"
     )
-    if outcome.ok and outcome.response is not None:
-        body += f"- **Gateway response:** `{json.dumps(outcome.response, sort_keys=True)}`\n"
+    if ots.error and not ots.ok:
+        body += f"- **OTS error:** `{_yaml_escape(ots.error)}`\n"
     if embed_name:
         body += f"\n![[{embed_name}]]\n"
     return frontmatter + body
-
-
-def anchor_hash_synchronously(
-    file_hash: str,
-    *,
-    bridge: Optional[CloudNotaryBridge] = None,
-    client_timestamp: Optional[str] = None,
-) -> AnchorResult:
-    """Await a single Cloud Notary gateway receipt before writing the note."""
-    gate = bridge if bridge is not None else CloudNotaryBridge()
-    return gate.anchor(file_hash, client_timestamp=client_timestamp)
-
-
-def _persist_blockchain_proof(
-    conn: sqlite3.Connection,
-    file_hash: str,
-    *,
-    status: str,
-) -> None:
-    conn.execute(
-        """
-        INSERT INTO blockchain_proofs (file_hash, status, updated_at)
-        VALUES (?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(file_hash) DO UPDATE SET
-            status = excluded.status,
-            updated_at = CURRENT_TIMESTAMP
-        """,
-        (file_hash, status),
-    )
 
 
 def fetch_golden_rows(
@@ -540,15 +548,15 @@ def fetch_golden_rows(
     return rows
 
 
-def write_vault_note(
+def export_golden_file(
     export_paths: ExportPaths,
     row: GoldenExportRow,
     *,
-    bridge: Optional[CloudNotaryBridge] = None,
-    persist_proof: Optional[Callable[[str, str], None]] = None,
+    export_mode: ExportMode,
+    persist_ots: Callable[[GoldenExportRow, Optional[bytes]], None],
     log: Callable[[str], None] = print,
-) -> tuple[AnchorResult, bool]:
-    """Anchor via gateway, copy the source asset, then write the markdown sidecar."""
+) -> tuple[OtsStampResult, bool, bool]:
+    """Stamp OTS into SQLite, copy the source asset, optionally write a sidecar."""
     day = extract_creation_date(row.full_path, row.modified_time)
     if day is not None:
         created_iso = datetime.datetime.combine(
@@ -557,11 +565,8 @@ def write_vault_note(
     else:
         created_iso = "unknown"
 
-    outcome = anchor_hash_synchronously(
-        row.file_hash,
-        bridge=bridge,
-        client_timestamp=created_iso if created_iso != "unknown" else None,
-    )
+    ots = stamp_ots_proof(row.file_hash)
+    persist_ots(row, ots.proof_blob)
 
     asset_copied = False
     if export_paths.extension and export_paths.embed_name:
@@ -571,20 +576,21 @@ def write_vault_note(
         except OSError as exc:
             log(f"Vault export: asset copy failed for {row.full_path}: {exc}")
 
-    export_paths.note_path.parent.mkdir(parents=True, exist_ok=True)
-    export_paths.note_path.write_text(
-        render_vault_note(
-            row,
-            outcome=outcome,
-            created_iso=created_iso,
-            embed_name=export_paths.embed_name if asset_copied else "",
-        ),
-        encoding="utf-8",
-    )
-    proof_status = "SUBMITTED" if outcome.ok else "PENDING"
-    if persist_proof is not None:
-        persist_proof(row.file_hash, proof_status)
-    return outcome, asset_copied
+    note_written = False
+    if export_mode_writes_sidecars(export_mode) and export_paths.extension:
+        export_paths.note_path.parent.mkdir(parents=True, exist_ok=True)
+        export_paths.note_path.write_text(
+            render_vault_note(
+                row,
+                ots=ots,
+                created_iso=created_iso,
+                embed_name=export_paths.embed_name if asset_copied else "",
+            ),
+            encoding="utf-8",
+        )
+        note_written = True
+
+    return ots, asset_copied, note_written
 
 
 def export_golden_vault(
@@ -593,61 +599,63 @@ def export_golden_vault(
     vault_root: Path,
     *,
     hierarchical: bool = True,
+    export_mode: ExportMode | str = "standard",
     log: Callable[[str], None] = print,
-    bridge: Optional[CloudNotaryBridge] = None,
 ) -> VaultExportResult:
-    """Export golden files into the vault with optional dated folders.
+    """Export golden files into the vault (assets only or assets + sidecars).
 
-    Each note is written only after the Cloud Notary gateway returns (or
-    exhausts retries). Frontmatter ``notary_status`` is ``ANCHORED`` on success
-    or ``PENDING`` when anchoring fails.
+    OpenTimestamps proofs are stamped during export and persisted exclusively
+    in ``file_index.ots_proof`` — no ``.ots`` files are written to the vault.
     """
-    from check_db_v2 import ensure_blockchain_schema
+    mode = normalize_export_mode(export_mode) if isinstance(export_mode, str) else export_mode
 
     vault_root = vault_root.resolve()
     vault_root.mkdir(parents=True, exist_ok=True)
-    ensure_blockchain_schema(str(db_path))
-
-    gate = bridge if bridge is not None else CloudNotaryBridge(logger=log)
-    result = VaultExportResult()
+    result = VaultExportResult(export_mode=mode)
 
     conn = sqlite3.connect(db_path)
     try:
+        configure_connection(conn)
         rows = fetch_golden_rows(conn, session_id)
         if not rows:
             log("Vault export: no golden files for this session.")
             return result
 
         layout = "hierarchical dated tree" if hierarchical else "flat vault root"
-        log(f"Vault export: {len(rows)} golden file(s) → {vault_root} ({layout})")
+        log(
+            f"Vault export ({mode}): {len(rows)} golden file(s) → {vault_root} ({layout})"
+        )
 
-        def _persist(hash_value: str, status: str) -> None:
-            _persist_blockchain_proof(conn, hash_value, status=status)
+        def _persist_ots(row: GoldenExportRow, proof_blob: Optional[bytes]) -> None:
+            persist_file_index_ots_proof(conn, row, proof_blob)
             conn.commit()
+            if proof_blob:
+                result.proofs_persisted += 1
 
         for row in rows:
             paths = resolve_export_paths(vault_root, row, hierarchical=hierarchical)
             paths = _disambiguate_export_paths(paths, row.file_hash)
-            outcome, asset_copied = write_vault_note(
+            ots, asset_copied, note_written = export_golden_file(
                 paths,
                 row,
-                bridge=gate,
-                persist_proof=_persist,
+                export_mode=mode,
+                persist_ots=_persist_ots,
                 log=log,
             )
-            result.notes_written += 1
-            result.note_paths.append(paths.note_path)
+            if note_written:
+                result.notes_written += 1
+                result.note_paths.append(paths.note_path)
             if asset_copied:
                 result.assets_copied += 1
                 result.asset_paths.append(paths.asset_path)
-            if outcome.ok:
+            if ots.ok:
                 result.anchored += 1
             else:
                 result.pending += 1
 
         log(
-            f"Vault export: wrote {result.notes_written} note(s), "
-            f"copied {result.assets_copied} asset(s); "
+            f"Vault export: mode={mode}, assets={result.assets_copied}, "
+            f"sidecars={result.notes_written}, ots_in_db={result.proofs_persisted}; "
             f"ANCHORED={result.anchored}, PENDING={result.pending}"
         )
     finally:

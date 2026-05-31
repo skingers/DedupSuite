@@ -104,6 +104,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Write notes at the vault root without a dated folder tree.",
     )
     parser.set_defaults(hierarchical=True)
+    parser.add_argument(
+        "--export-mode",
+        choices=db_ingest.EXPORT_MODES,
+        default="standard",
+        help=(
+            "Vault export profile: 'standard' copies only physical assets (default); "
+            "'plm' or 'obsidian' also writes Markdown sidecars for LLM/knowledge use."
+        ),
+    )
     return parser
 
 
@@ -117,6 +126,7 @@ def run_production(
     export_vault: bool = True,
     integrity_check: bool = True,
     hierarchical: bool = True,
+    export_mode: str = "standard",
 ) -> int:
     """Execute the production pipeline for resolved absolute paths."""
     device = device_id or platform.node() or "production-device"
@@ -145,6 +155,7 @@ def run_production(
     _log(f"Session: {session} | Device: {device}")
     _log(f"Files to ingest: {len(file_paths)} | Hash workers: {PRODUCER_WORKERS}")
     _log(f"Vault layout: {'hierarchical (YYYY/YYYY-MM-DD)' if hierarchical else 'flat'}")
+    _log(f"Export mode: {export_mode}")
 
     _prepare_database(paths.database, device)
 
@@ -183,11 +194,14 @@ def run_production(
                 session,
                 paths.destination,
                 hierarchical=hierarchical,
+                export_mode=export_mode,
                 log=_log,
             )
             _log(
-                f"Vault export complete: {export_result.notes_written} notes, "
-                f"{export_result.assets_copied} assets copied, "
+                f"Vault export complete ({export_result.export_mode}): "
+                f"{export_result.assets_copied} assets, "
+                f"{export_result.notes_written} sidecars, "
+                f"{export_result.proofs_persisted} OTS proofs in DB, "
                 f"{export_result.anchored} anchored, {export_result.pending} pending"
             )
         finally:
@@ -210,6 +224,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         export_vault=not args.no_export,
         integrity_check=not args.no_integrity_check,
         hierarchical=args.hierarchical,
+        export_mode=args.export_mode,
     )
 
 

@@ -113,11 +113,29 @@ The ingest path (`pipeline.py` + `ingest_kernel.py`) separates CPU-bound hashing
 
 **Design goals:** maximise throughput on multi-core hosts, keep the GUI responsive during large audits, and ensure every database commit is atomic with its cryptographic proof.
 
-#### Production vault export & chronological naming
+#### Production vault export, forensic ledger & export profiles
 
-`run_production.py` (with `--tree-mode` / `--hierarchical`) classifies golden files, copies raw assets into dated vault folders (`YYYY/YYYY-MM-DD/`), and writes Obsidian sidecar notes. When trustworthy creation metadata is available, exported filenames use:
+`run_production.py` ingests source files, classifies golden copies, stamps OpenTimestamps proofs, and projects assets into the destination vault. The SQLite database (`data_mine.db` or a path passed via `--db`) is the **definitive forensic registry**: Ed25519 batch manifests, golden/legacy classification, and per-file **`file_index.ots_proof`** BLOB columns. **No loose `.ots` files are written to the vault** — binary proofs live only in the database.
+
+With `--tree-mode` / `--hierarchical` (default), trustworthy creation metadata produces a dated folder tree (`YYYY/YYYY-MM-DD/`) and filenames:
 
 `YYYY-MM-DD-[Original_Name].[ext]`
+
+**Export mode** (`--export-mode`) selects the vault surface area:
+
+| Mode | CLI | Vault contents |
+|---|---|---|
+| **Standard** (default) | `--export-mode standard` | Physical source assets only (`.png`, `.pdf`, `.docx`, …) in the chronological tree. **No** Markdown sidecars or other text clutter. |
+| **PLM / Obsidian** | `--export-mode plm` or `--export-mode obsidian` | Same asset tree **plus** clean Markdown sidecars with YAML frontmatter and Obsidian `![[asset]]` embeds, ready for LLM tokenisation or knowledge-graph use. |
+
+```bash
+python run_production.py \
+  --source "D:\Archive\Raw" \
+  --destination "D:\Obsidian\MyVault" \
+  --db "D:\DedupSuite\data_mine.db" \
+  --tree-mode \
+  --export-mode standard
+```
 
 ##### Chronological Naming Fallback Protocol
 
@@ -202,11 +220,14 @@ A passing scan (`IntegrityCheck.scan() == True`) confirms that every committed i
 | `pipeline.py` | Producer/consumer concurrent ingest |
 | `ingest_kernel.py` | Per-file streaming SHA-256 worker |
 | `db_ingest.py` | SQLite batch writes, vault export, and naming fallback |
-| `run_production.py` | Production ingest, hierarchical vault export, and notary |
-| `docs/TDA.md` | Technical Design Architecture (naming & verification specs) |
+| `run_production.py` | Production ingest, `--export-mode`, hierarchical vault export |
+| `docs/TDA.md` | Technical Design Architecture (naming, OTS BLOB, export profiles) |
 | `crypto_gate.py` | Ed25519 signing gate (OS vault backed) |
 | `integrity_check.py` | On-demand signature verification |
-| `core/` | Notary and knowledge-graph export |
+| `core/ots_proof.py` | OpenTimestamps proof generation (in-memory → SQLite) |
+| `core/` | Notary worker, Markdown export, Obsidian bridge sources |
+| `obsidian-plugin/` | DedupSuite 2.0 Obsidian integration (TypeScript + built `main.js`) |
+| `production_config.py` | Absolute-path validation for production CLI |
 | `network/` | Remote notary bridge |
 | `tests/` | Unit and integration tests |
 

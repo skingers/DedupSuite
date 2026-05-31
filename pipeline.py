@@ -138,6 +138,15 @@ def run_pipeline(
 ) -> Tuple[float, int, List[Row]]:
     """Run the concurrent pipeline.
 
+    When ``db_path`` is set, opens (or creates) that SQLite file, bootstraps
+    ``file_index`` and ``batch_signatures`` via :func:`db_ingest.configure_connection`,
+    hashes with :data:`PRODUCER_WORKERS` (8) threads, and signs each committed batch.
+
+    Args:
+        paths: Absolute file paths under the production source tree.
+        db_path: Absolute path to the production SQLite database, or ``None`` for
+            in-memory collection only.
+
     Returns:
         ``(duration_sec, inserted_count, collected_rows)`` where ``collected_rows``
         holds every ``(path, record)`` batch element for downstream duplicate

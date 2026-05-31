@@ -25,6 +25,9 @@ logs/
 *.pdf
 *.png
 
+# --- Obsidian plugin build deps ---
+obsidian-plugin/node_modules/
+
 # --- Python Environment ---
 __pycache__/
 *.pyc
