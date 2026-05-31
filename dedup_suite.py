@@ -30,6 +30,9 @@ from core.markdown_translator import MarkdownTranslator, UniqueFileRecord, _sani
 from network.notary_bridge import CloudNotaryBridge
 import ingest_kernel
 from pipeline import run_pipeline
+from config_manager import AppConfig
+
+config = AppConfig()
 
 try:
     import customtkinter as ctk
@@ -81,42 +84,6 @@ def get_drive_id(path: Union[str, Path]) -> str:
         # AUDIT-REVIEW: Catch specific failures instead of bare except when resolving drive id.
         fallback_str = str(Path(path).resolve().anchor)
         return hashlib.sha256(fallback_str.encode()).hexdigest()[:16]
-
-class ConfigManager:
-    """Load and persist application settings as JSON beside the executable or script."""
-
-    def __init__(self, filename: str = "settings.json") -> None:
-        # Determine if running as a script or frozen exe
-        if getattr(sys, 'frozen', False):
-            base_path = os.path.dirname(sys.executable)
-        else:
-            base_path = os.path.dirname(os.path.abspath(__file__))
-        self.filename = os.path.join(base_path, filename)
-        self.defaults: Dict[str, Any] = {
-            "last_source": "", "last_dest": "", "scan_mode": "Exact Match (Fast)",
-            "threshold": 0, "threads": 4, "ignore_exts": "", "ignore_folders": "",
-            "theme": "light", "merge_master": "", "merge_incoming": ""
-        }
-
-    def load(self) -> Dict[str, Any]:
-        if not os.path.exists(self.filename):
-            return self.defaults.copy()
-        try:
-            with open(self.filename, "r", encoding="utf-8") as f:
-                config = self.defaults.copy()
-                config.update(json.load(f))
-                return config
-        except (OSError, json.JSONDecodeError, TypeError):
-            # AUDIT-REVIEW: Replace bare except with explicit I/O and JSON decode errors.
-            return self.defaults.copy()
-
-    def save(self, data: Dict[str, Any]) -> None:
-        try:
-            with open(self.filename, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=4)
-        except OSError:
-            # AUDIT-REVIEW: Log settings persistence failures silently but safely.
-            pass
 
 class DatabaseManager:
     """SQLite ledger for indexed files, golden/legacy status, and session metadata."""
@@ -1673,6 +1640,21 @@ CALM_STEP1_TITLE = "Map the Swamp"
 CALM_STEP2_TITLE = "Secure the Gold"
 CALM_STEP3_TITLE = "Ignite Your Mind"
 
+COLLISION_POLICY_LABELS = ("Skip (Safe)", "Overwrite", "Rename")
+COLLISION_LABEL_TO_CONFIG = {
+    "Skip (Safe)": "skip",
+    "Overwrite": "overwrite",
+    "Rename": "rename",
+}
+COLLISION_CONFIG_TO_LABEL = {v: k for k, v in COLLISION_LABEL_TO_CONFIG.items()}
+
+HASHING_DEPTH_LABELS = ("Quick Check", "Deep Cryptographic")
+HASHING_LABEL_TO_CONFIG = {
+    "Quick Check": "quick",
+    "Deep Cryptographic": "deep",
+}
+HASHING_CONFIG_TO_LABEL = {v: k for k, v in HASHING_LABEL_TO_CONFIG.items()}
+
 
 class Tooltip:
     """Lightweight hover tooltip for any Tk/CustomTkinter widget.
@@ -1744,13 +1726,11 @@ class DedupApp:
         # Set application window icon (brand mark) via the lazy asset cache.
         self._set_window_icon()
 
-        self.cfg = ConfigManager()
         self.db_manager = DatabaseManager()
         self.db_path = self.db_manager.db_path
         self.stop_event = threading.Event()
         self.pause_event = threading.Event()
         self.pause_event.set()
-        self.settings = self.cfg.load()
         
         # Theme Setup
         ctk.set_appearance_mode("Dark")
@@ -1760,15 +1740,11 @@ class DedupApp:
         # Dark-foreground icon variant for use on bright (brand cyan) fills.
         self.icons_dark = IconFactory.create_icons(color=COLOR_ON_INFO)
 
-        self._init_header()
-
         self.nb = ctk.CTkTabview(self.root)
         self.nb.pack(fill="both", expand=True)
-        
-        self.t_audit = self.nb.add("Your Journey")
-        self.t_merge = self.nb.add("Merge Folders")
-        self.t_settings = self.nb.add("Expert Studio")
-        self.t_datamine = self.nb.add("The Vault Index")
+
+        self.t_vault = self.nb.add("Vault Elevation")
+        self.t_pro = self.nb.add("Pro Studio")
         
         f_log = ctk.CTkFrame(self.root, fg_color="transparent")
         f_log.pack(fill="x", padx=20, pady=(10, 5))
@@ -1786,22 +1762,39 @@ class DedupApp:
         self.pbar.pack(fill="x", padx=20, pady=(0, 20))
         self.pbar.set(0)
 
-        self.journey_export_mode = tk.StringVar(value="Standard Mode")
-        _vault_init = (self.settings.get("last_dest") or "").strip()
-        if not _vault_init:
-            _vault_init = str((Path.home() / "Desktop" / "DedupSuite_Vault").resolve())
+        self.journey_export_mode = tk.StringVar(
+            value=config.get("journey_export_mode", "Standard Mode"),
+        )
+        _vault_init = self._initial_vault_path()
         self.target_vault_dir = tk.StringVar(value=_vault_init)
+        self.mode_var = tk.StringVar(value="Exact")
+        self.review_var = tk.BooleanVar(value=bool(config.get("review_duplicates", True)))
+        self.notarise_var = tk.BooleanVar(value=bool(config.get("notarise", True)))
 
-        self._init_audit_tab()
-        self._init_merge_tab()
-        self._init_settings_tab()
-        self._init_datamine_tab()
+        self._init_vault_elevation_tab()
+        self._init_pro_studio_tab()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         # Thread-safe log buffer drained onto the widget every 100ms on the
         # main thread. Worker threads enqueue lines (never touch the widget).
         self._log_queue: "queue.Queue[str]" = queue.Queue()
         self.root.after(100, self._process_log_queue)
+
+    def _initial_vault_path(self) -> str:
+        raw = (config.get("vault_path") or config.get("last_dest") or "").strip()
+        if raw:
+            return raw
+        return str((Path.home() / "Desktop" / "DedupSuite_Vault").resolve())
+
+    @staticmethod
+    def _split_csv_setting(key: str) -> List[str]:
+        raw = config.get(key, "") or ""
+        return [part.strip() for part in str(raw).split(",") if part.strip()]
+
+    @staticmethod
+    def _shutil_copy_from_config() -> Callable[[str, str], Any]:
+        method_name = config.get("copy_method", "copy2")
+        return getattr(shutil, method_name, shutil.copy2)
 
     def _center_window(self, width, height):
         screen_width = self.root.winfo_screenwidth()
@@ -1948,8 +1941,8 @@ class DedupApp:
         except (tk.TclError, OSError, RuntimeError):
             pass
 
-    def _init_header(self) -> None:
-        """Build the branded header bar shown above the tab view.
+    def _init_header(self, parent: Any) -> None:
+        """Build the branded header bar inside the given parent (Vault Elevation tab).
 
         Prefers a pre-rendered wordmark lockup at ``assets/wordmark.png`` (drop
         the official ``DEDUP SUITE 2.0`` lockup there and it is used verbatim).
@@ -1958,8 +1951,8 @@ class DedupApp:
         wrapped in :class:`CTkImage`, so references are retained on ``self`` to
         prevent garbage collection.
         """
-        header = ctk.CTkFrame(self.root, fg_color=BRAND_BLACK, corner_radius=0, height=82)
-        header.pack(side="top", fill="x")
+        header = ctk.CTkFrame(parent, fg_color=BRAND_BLACK, corner_radius=8, height=82)
+        header.pack(side="top", fill="x", padx=12, pady=(12, 8))
         header.pack_propagate(False)
 
         # Right-aligned background-task status indicator (click for an info
@@ -2203,15 +2196,30 @@ class DedupApp:
         content.pack(fill="x", padx=15, pady=(0, 3) if tight else (0, 14))
         return content
 
+    def _pick_merge_master(self) -> None:
+        chosen = filedialog.askdirectory(title="Choose master folder")
+        if chosen:
+            self.m_master.set(chosen)
+            config.set("merge_master", chosen)
+
+    def _pick_merge_incoming(self) -> None:
+        chosen = filedialog.askdirectory(title="Choose incoming folder")
+        if chosen:
+            self.m_inc.set(chosen)
+            config.set("merge_incoming", chosen)
+
     def _pick_source_folder(self) -> None:
         chosen = filedialog.askdirectory(title="Choose the folder to rescue")
         if chosen:
             self.src_var.set(chosen)
+            config.set("last_source", chosen)
 
     def _pick_destination_vault(self) -> None:
         chosen = filedialog.askdirectory(title="Choose Destination Vault")
         if chosen:
             self.target_vault_dir.set(chosen)
+            config.set("vault_path", chosen)
+            self._sync_vault_path_display()
 
     def _require_destination_vault(self) -> Optional[str]:
         """Resolve Destination Vault for export; warn if unset before Begin Rescue."""
@@ -2246,6 +2254,7 @@ class DedupApp:
                     path = path.strip("{}")
                     if os.path.isdir(path):
                         self.src_var.set(path)
+                        config.set("last_source", path)
                         return
 
             windnd.hook_dropfiles(widget.winfo_toplevel(), func=_on_drop)
@@ -2314,30 +2323,453 @@ class DedupApp:
         body.pack(fill="x", padx=8, pady=(0, JOURNEY_PADY))
         return body
 
-    def _init_audit_tab(self) -> None:
-        """Calm 3-step journey — tight vertical spacing, no scroll."""
-        self._rescue_matrix_cells: list[Any] = []
-        journey = ctk.CTkFrame(self.t_audit, fg_color="transparent")
-        journey.pack(side="top", fill="x", anchor="n", padx=2, pady=0)
-        journey.grid_columnconfigure(0, weight=1)
-        for row in range(5):
-            journey.grid_rowconfigure(row, weight=0)
+    def _collision_policy_label(self) -> str:
+        stored = str(config.get("collision_policy", "skip")).lower()
+        return COLLISION_CONFIG_TO_LABEL.get(stored, "Skip (Safe)")
 
-        step1 = self._calm_step_frame(
-            journey,
-            1,
-            CALM_STEP1_TITLE,
-            "Point DedupSuite at the source folder to ingest. "
-            "The Identity Scanner will discover Golden Files across the tree — no cloud uploads.",
-            grid_row=0,
+    def _hashing_depth_label(self) -> str:
+        stored = str(config.get("hashing_depth", "quick")).lower()
+        return HASHING_CONFIG_TO_LABEL.get(stored, "Quick Check")
+
+    def _apply_collision_policy(self, label: str) -> None:
+        config.set("collision_policy", COLLISION_LABEL_TO_CONFIG.get(label, "skip"))
+
+    def _apply_hashing_depth(self, label: str) -> None:
+        depth = HASHING_LABEL_TO_CONFIG.get(label, "quick")
+        config.set("hashing_depth", depth)
+        if label == "Deep Cryptographic":
+            config.set("scan_mode", "Deep Cryptographic")
+            self.mode_var.set("Exact")
+        else:
+            config.set("scan_mode", "Exact Match (Fast)")
+            self.mode_var.set("Exact")
+
+    def _sync_vault_path_display(self) -> None:
+        path = (config.get("vault_path") or config.get("last_dest") or self.target_vault_dir.get() or "").strip()
+        if not path:
+            path = self._initial_vault_path()
+        self.target_vault_dir.set(path)
+        if hasattr(self, "lbl_vault_destination"):
+            self.lbl_vault_destination.configure(text=path)
+
+    def _sync_simulate_only_config(self) -> None:
+        """Persist Pro Studio simulate-only toggle for the one-click elevation pipeline."""
+        val = self.simulate_only_var.get()
+        config.set("simulate_only", val)
+
+    def _simulate_only_from_config(self) -> bool:
+        return bool(config.get("simulate_only", False))
+
+    @staticmethod
+    def _open_path_in_explorer(target: Union[str, Path]) -> None:
+        """Open a folder in the system file manager (post-elevation reward)."""
+        path = str(Path(target).resolve())
+        system = platform.system()
+        try:
+            if system == "Windows":
+                os.startfile(path)  # type: ignore[attr-defined]
+            elif system == "Darwin":
+                subprocess.run(["open", path], check=False)
+            else:
+                subprocess.run(["xdg-open", path], check=False)
+        except Exception as exc:
+            raise OSError(str(exc)) from exc
+
+    def _elevation_paths_from_config(self) -> Tuple[str, str]:
+        source = (config.get("last_source") or "").strip()
+        vault = (config.get("vault_path") or config.get("last_dest") or "").strip()
+        return source, vault
+
+    def _validate_elevation_paths(self, source: str, vault: str) -> bool:
+        """Validate source and vault paths; log failures, alert only on critical I/O."""
+        if not source:
+            self.log("Elevation aborted: no source folder configured (Select Source).")
+            return False
+        if not Path(source).is_dir():
+            self.log(f"Elevation aborted: source is not a directory: {source}")
+            return False
+        if not vault:
+            self.log("Elevation aborted: no vault destination configured.")
+            return False
+        try:
+            vault_root = Path(vault)
+            vault_root.mkdir(parents=True, exist_ok=True)
+            shutil.disk_usage(vault_root.resolve())
+        except OSError as exc:
+            self.log(f"Elevation aborted: vault destination unavailable — {exc}")
+            err = str(exc).lower()
+            if any(token in err for token in ("not ready", "device", "no such", "denied", "disconnected")):
+                self.root.after(
+                    0,
+                    lambda e=exc: messagebox.showerror(
+                        "Storage Unavailable",
+                        f"The destination drive or path is not accessible:\n{e}",
+                    ),
+                )
+            return False
+        return True
+
+    def _auditor_class_from_config(self, hashing_depth: str) -> type:
+        if hashing_depth == "deep":
+            return FileAuditor
+        scan_mode = str(config.get("scan_mode", "")).lower()
+        if "visual" in scan_mode or "video" in scan_mode:
+            return VideoFileAuditor
+        return FileAuditor
+
+    def _set_elevation_status(self, text: str) -> None:
+        if hasattr(self, "lbl_rescue_progress"):
+            self.root.after(0, lambda t=text: self.lbl_rescue_progress.configure(text=t))
+
+    def _ensure_file_index_status_column(self) -> None:
+        with self.db_manager.conn:
+            cur = self.db_manager.conn.cursor()
+            cur.execute("PRAGMA table_info(file_index)")
+            columns = [info[1] for info in cur.fetchall()]
+            if "status" not in columns:
+                self.db_manager.conn.execute(
+                    "ALTER TABLE file_index ADD COLUMN status TEXT DEFAULT 'active'"
+                )
+
+    def _fetch_session_legacy_records(self, session_id: str) -> List[Tuple[Any, ...]]:
+        sql = (
+            "SELECT rowid, full_path, file_size, modified_time FROM file_index "
+            "WHERE is_golden = 0 AND last_session_id = ? "
+            "AND (status != 'archived' OR status IS NULL)"
         )
-        self.src_var = tk.StringVar(value=self.settings.get("last_source", ""))
+        with self.db_manager.conn:
+            cur = self.db_manager.conn.cursor()
+            cur.execute(sql, (session_id,))
+            return cur.fetchall()
+
+    def _resolve_vault_dest(
+        self,
+        src_path: Path,
+        isolation_path: Path,
+        reserved: set,
+        collision_policy: str,
+    ) -> Optional[Path]:
+        dest_file = isolation_path / src_path.name
+        policy = (collision_policy or "skip").lower()
+        if policy == "skip":
+            if dest_file.exists() or str(dest_file) in reserved:
+                return None
+            return dest_file
+        if policy == "overwrite":
+            return dest_file
+        counter = 2
+        while dest_file.exists() or str(dest_file) in reserved:
+            dest_file = isolation_path / f"{src_path.stem}_v{counter}{src_path.suffix}"
+            counter += 1
+        return dest_file
+
+    def _write_archive_manifest(self, report_path: Path, csv_entries: List[List[Any]]) -> None:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(report_path, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle)
+            writer.writerow([
+                "Status", "Filename", "Original Path", "New Path", "Modified Date",
+                "File Size (MB)", "Transaction ID", "Session ID",
+            ])
+            writer.writerows(csv_entries)
+
+    def _build_manifest_rows(
+        self,
+        records: Sequence[Tuple[Any, ...]],
+        isolation_path: Path,
+        collision_policy: str,
+        session_id: str,
+        transaction_id: str,
+        *,
+        status_planned: str,
+    ) -> Tuple[List[List[Any]], set]:
+        csv_entries: List[List[Any]] = []
+        reserved: set = set()
+        for _rowid, fp_str, size, mtime in records:
+            src_path = Path(fp_str)
+            if not src_path.exists():
+                continue
+            dest_file = self._resolve_vault_dest(src_path, isolation_path, reserved, collision_policy)
+            if dest_file is None:
+                status = "SKIPPED"
+                dest_display = ""
+            else:
+                status = status_planned
+                reserved.add(str(dest_file))
+                dest_display = str(dest_file)
+            try:
+                mtime_val = mtime if mtime else os.path.getmtime(src_path)
+            except OSError:
+                mtime_val = time.time()
+            size_mb = f"{(size or 0) / (1024 * 1024):.2f}"
+            csv_entries.append([
+                status,
+                src_path.name,
+                str(src_path),
+                dest_display,
+                time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime_val)),
+                size_mb,
+                transaction_id,
+                session_id,
+            ])
+        return csv_entries, reserved
+
+    def _run_elevation_pipeline(self) -> None:
+        """One-click PLAN → optional EXECUTE pipeline (no blocking dialogs)."""
+        source_path, vault_path = self._elevation_paths_from_config()
+        collision_policy = str(config.get("collision_policy", "skip")).lower()
+        hashing_depth = str(config.get("hashing_depth", "quick")).lower()
+        simulate_only = self._simulate_only_from_config()
+
+        try:
+            self._set_elevation_status("Validating paths…")
+            if not self._validate_elevation_paths(source_path, vault_path):
+                return
+
+            self.log("—— Vault Elevation pipeline started ——")
+            self.log(f"Source: {source_path}")
+            self.log(f"Vault: {vault_path}")
+            self.log(
+                f"Policy: collision={collision_policy}, hashing={hashing_depth}, "
+                f"simulate_only={simulate_only}"
+            )
+
+            self._set_elevation_status("Planning elevation (audit)…")
+            cls = self._auditor_class_from_config(hashing_depth)
+            ignore_exts = self._split_csv_setting("ignore_exts")
+            ignore_folders = self._split_csv_setting("ignore_folders")
+            auditor = cls(
+                source_path,
+                log_callback=self.log,
+                progress_callback=self.progress,
+                review_mode=False,
+                stop_event=self.stop_event,
+                pause_event=self.pause_event,
+                threshold=config.get("threshold", 0),
+                threads=config.get("threads", 4),
+                ignore_exts=ignore_exts,
+                ignore_folders=ignore_folders,
+                db_manager=self.db_manager,
+                session_id=self.current_session_id,
+            )
+            auditor.run()
+            self.db_manager.identify_golden_versions(session_id=self.current_session_id)
+
+            if bool(config.get("notarise", self.notarise_var.get())):
+                try:
+                    notary = DedupNotary(self.db_path)
+                    threading.Thread(
+                        target=notary.batch_submit_unnotarised, daemon=True,
+                    ).start()
+                except Exception as exc:
+                    self.log(f"Notarisation background task failed to start: {exc}")
+            else:
+                self.log("Notarisation skipped (disabled in Pro Studio).")
+
+            vault_export_root = str(Path(vault_path).resolve())
+            try:
+                kg_thread = threading.Thread(
+                    target=self.export_knowledge_graph,
+                    args=(self.current_session_id, source_path, vault_export_root),
+                    daemon=True,
+                )
+                kg_thread.start()
+            except Exception as exc:
+                self.log(f"Knowledge graph export failed to start: {exc}")
+
+            self._ensure_file_index_status_column()
+            records = self._fetch_session_legacy_records(self.current_session_id)
+            session_timestamp = time.strftime("%Y%m%d_%H%M%S")
+            transaction_id = session_timestamp
+            vault_root = Path(vault_path).resolve()
+            isolation_path = (
+                vault_root / "Isolated_Legacy_Copies" / f"Session_{session_timestamp}"
+            )
+            report_path = vault_root / f"Archive_Manifest_{session_timestamp}.csv"
+
+            plan_rows, _reserved = self._build_manifest_rows(
+                records,
+                isolation_path,
+                collision_policy,
+                self.current_session_id,
+                transaction_id,
+                status_planned="PLANNED",
+            )
+            self._write_archive_manifest(report_path, plan_rows)
+            self.log(f"Cryptographic manifest written: {report_path.resolve()}")
+            self.log(f"Plan catalogued {len(plan_rows)} legacy record(s) for vault isolation.")
+            self._set_elevation_status(
+                f"Plan complete — {len(plan_rows)} record(s) in manifest.",
+            )
+
+            if simulate_only:
+                self.log(
+                    "Simulate Only is enabled in Pro Studio — file transfer skipped. "
+                    "Manifest catalogued; originals remain untouched.",
+                )
+                self._set_elevation_status("Elevation Complete (Simulate Only)")
+                self.root.after(0, self.update_datamine_stats)
+                return
+
+            if not records:
+                self.log("No legacy copies to copy for this session; elevation finished.")
+                self._set_elevation_status("Elevation Complete")
+                try:
+                    self._open_path_in_explorer(vault_root)
+                    self.log(f"Opened vault destination: {vault_root}")
+                except OSError as exc:
+                    self.log(f"Could not open vault folder: {exc}")
+                self.root.after(0, self.update_datamine_stats)
+                return
+
+            total_size = sum(r[2] or 0 for r in records)
+            try:
+                free_space = shutil.disk_usage(vault_root).free
+            except OSError as exc:
+                self.log(f"Elevation aborted: cannot read vault disk space — {exc}")
+                self.root.after(
+                    0,
+                    lambda e=exc: messagebox.showerror(
+                        "Storage Unavailable",
+                        f"Cannot access the vault volume:\n{e}",
+                    ),
+                )
+                return
+            if free_space < total_size:
+                req_gb = total_size / (1024 ** 3)
+                free_gb = free_space / (1024 ** 3)
+                self.log(
+                    f"Elevation aborted: insufficient disk space "
+                    f"(need {req_gb:.2f} GB, have {free_gb:.2f} GB).",
+                )
+                self.root.after(
+                    0,
+                    lambda: messagebox.showerror(
+                        "Insufficient Disk Space",
+                        f"Required: {req_gb:.2f} GB\nAvailable: {free_gb:.2f} GB",
+                    ),
+                )
+                return
+
+            self._set_elevation_status("Executing non-destructive vault copy…")
+            isolation_path.mkdir(parents=True, exist_ok=True)
+            copy_fn = self._shutil_copy_from_config()
+            csv_entries: List[List[Any]] = []
+            reserved_exec: set = set()
+            copied_count = 0
+            copied_size = 0
+            aborted = False
+
+            for i, (rowid, fp_str, size, mtime) in enumerate(records):
+                if self.stop_event.is_set():
+                    aborted = True
+                    self.log("Aborted by User.")
+                    break
+                src_path = Path(fp_str)
+                if not src_path.exists():
+                    continue
+                dest_file = self._resolve_vault_dest(
+                    src_path, isolation_path, reserved_exec, collision_policy,
+                )
+                if dest_file is None:
+                    csv_entries.append([
+                        "SKIPPED",
+                        src_path.name,
+                        str(src_path),
+                        "",
+                        "",
+                        f"{(size or 0) / (1024 * 1024):.2f}",
+                        transaction_id,
+                        self.current_session_id,
+                    ])
+                    continue
+                reserved_exec.add(str(dest_file))
+                try:
+                    if self.stop_event.is_set():
+                        aborted = True
+                        self.log("Aborted by User.")
+                        break
+                    mtime_val = mtime if mtime else os.path.getmtime(src_path)
+                    copy_fn(str(src_path), str(dest_file))
+                    with self.db_manager.conn:
+                        self.db_manager.conn.execute(
+                            "UPDATE file_index SET full_path = ?, status = 'archived', "
+                            "pre_archive_path = ?, archive_transaction_id = ? WHERE rowid = ?",
+                            (str(dest_file), str(src_path), transaction_id, rowid),
+                        )
+                    size_mb = f"{(size or 0) / (1024 * 1024):.2f}"
+                    csv_entries.append([
+                        "COPIED",
+                        src_path.name,
+                        str(src_path),
+                        str(dest_file),
+                        time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime_val)),
+                        size_mb,
+                        transaction_id,
+                        self.current_session_id,
+                    ])
+                    copied_count += 1
+                    copied_size += (size or 0)
+                    if copied_count % 500 == 0:
+                        self.log(f"Vault copy: {copied_count} file(s) copied…")
+                    self.progress(i + 1, len(records), f"Copying {src_path.name}")
+                except Exception as exc:
+                    self.log(f"Vault copy error on {src_path.name}: {exc}")
+
+            if csv_entries:
+                self._write_archive_manifest(report_path, csv_entries)
+
+            if aborted:
+                self._set_elevation_status("Elevation aborted")
+                self.root.after(0, self.update_datamine_stats)
+                return
+
+            self.log(
+                f"Elevation succeeded: {copied_count} record(s) copied "
+                f"({copied_size / (1024 ** 3):.2f} GB). Manifest: {report_path.resolve()}"
+            )
+            self.log("Original source files remain untouched (non-destructive copy2).")
+            self._set_elevation_status("Elevation Complete")
+            try:
+                self._open_path_in_explorer(vault_root)
+                self.log(f"Opened vault destination: {vault_root}")
+            except OSError as exc:
+                self.log(f"Could not open vault folder: {exc}")
+            self.root.after(0, self.update_datamine_stats)
+        except Exception as exc:
+            self.log(f"Elevation pipeline error: {exc}")
+            self._set_elevation_status("Elevation failed — see Background notes.")
+        finally:
+            self.root.after(0, self.reset_scan_buttons)
+
+    def _init_vault_elevation_tab(self) -> None:
+        """Primary path: branding, source/vault pickers, and Elevate & Vault."""
+        self._rescue_matrix_cells: list[Any] = []
+        self._init_header(self.t_vault)
+
+        body = ctk.CTkScrollableFrame(self.t_vault, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=16, pady=(0, 12))
+
+        ctk.CTkLabel(
+            body, text="Select Source", font=FONT_CALM_STEP, anchor="w",
+        ).pack(fill="x", pady=(8, 4))
+        ctk.CTkLabel(
+            body,
+            text="Point DedupSuite at the folder to ingest. Golden Files are discovered locally — no cloud uploads.",
+            font=FONT_CALM_SMALL,
+            text_color=COLOR_HINT,
+            anchor="w",
+            justify="left",
+            wraplength=820,
+        ).pack(fill="x", pady=(0, 8))
+
+        self.src_var = tk.StringVar(value=config.get("last_source", ""))
         self.drop_zone = ctk.CTkFrame(
-            step1, height=72, corner_radius=14,
+            body, height=72, corner_radius=14,
             border_width=2, border_color=COLOR_NEUTRAL,
             fg_color=("gray90", "#1E1E22"),
         )
-        self.drop_zone.pack(fill="x", pady=JOURNEY_PADY)
+        self.drop_zone.pack(fill="x", pady=(0, 8))
         self.drop_zone.pack_propagate(False)
         ctk.CTkLabel(
             self.drop_zone,
@@ -2346,119 +2778,241 @@ class DedupApp:
         ).pack(expand=True)
         ctk.CTkLabel(
             self.drop_zone,
-            text="Choose the folder to discover Golden Files",
+            text="Choose the folder to elevate into your vault",
             font=FONT_CALM_SMALL,
             text_color=COLOR_HINT,
         ).pack(pady=(0, 4))
         self._bind_drop_target(self.drop_zone)
-        path_row = ctk.CTkFrame(step1, fg_color="transparent")
-        path_row.pack(fill="x", pady=JOURNEY_PADY)
+        path_row = ctk.CTkFrame(body, fg_color="transparent")
+        path_row.pack(fill="x", pady=(0, 16))
         ctk.CTkEntry(
             path_row, textvariable=self.src_var,
-            placeholder_text="Selected folder path…",
-            height=26, font=FONT_CALM_SMALL,
-        ).pack(side="left", fill="x", expand=True, padx=(0, 4))
+            placeholder_text="Source folder path…",
+            height=32, font=FONT_CALM_BODY,
+        ).pack(side="left", fill="x", expand=True, padx=(0, 8))
         ctk.CTkButton(
             path_row, text="Browse", image=self.icons["folder"], compound="left",
-            width=90, height=26, command=self._pick_source_folder,
+            width=100, height=32, command=self._pick_source_folder,
         ).pack(side="left")
 
         ctk.CTkLabel(
-            step1,
-            text="Destination Vault",
-            font=FONT_CALM_SMALL,
-            text_color=COLOR_HINT,
+            body, text="Vault Destination", font=FONT_CALM_STEP, anchor="w",
+        ).pack(fill="x", pady=(4, 4))
+        vault_card = ctk.CTkFrame(body, corner_radius=10, fg_color=("gray92", "#1A1A1F"))
+        vault_card.pack(fill="x", pady=(0, 8))
+        vault_inner = ctk.CTkFrame(vault_card, fg_color="transparent")
+        vault_inner.pack(fill="x", padx=12, pady=10)
+        self.lbl_vault_destination = ctk.CTkLabel(
+            vault_inner,
+            text=self._initial_vault_path(),
+            font=FONT_CALM_BODY,
             anchor="w",
-        ).pack(fill="x", pady=(JOURNEY_PADY, 0))
-        vault_row = ctk.CTkFrame(step1, fg_color="transparent")
-        vault_row.pack(fill="x", pady=JOURNEY_PADY)
-        ctk.CTkEntry(
-            vault_row, textvariable=self.target_vault_dir,
-            placeholder_text="Destination Vault path…",
-            height=26, font=FONT_CALM_SMALL,
-        ).pack(side="left", fill="x", expand=True, padx=(0, 4))
-        ctk.CTkButton(
-            vault_row, text="Browse", image=self.icons["folder"], compound="left",
-            width=90, height=26, command=self._pick_destination_vault,
-        ).pack(side="left")
-
-        step2 = self._calm_step_frame(
-            journey,
-            2,
-            CALM_STEP2_TITLE,
-            "Identity Scanner elevates clutter into Verified Golden Masters.",
-            grid_row=1,
+            justify="left",
+            wraplength=760,
         )
+        self.lbl_vault_destination.pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(
+            vault_inner, text="Change", image=self.icons["folder"], compound="left",
+            width=100, height=32, command=self._pick_destination_vault,
+        ).pack(side="right", padx=(8, 0))
+        self._sync_vault_path_display()
+
         self.lbl_rescue_progress = ctk.CTkLabel(
-            step2,
-            text="Waiting to begin Golden File discovery and elevation…",
+            body,
+            text="Ready to elevate Golden Files into your vault.",
             font=FONT_CALM_SMALL,
             text_color=COLOR_INFO,
             anchor="w",
             justify="left",
             wraplength=820,
         )
-        self.lbl_rescue_progress.pack(fill="x", pady=JOURNEY_PADY)
-        self.f_rescue_matrix = ctk.CTkFrame(step2, fg_color="transparent", height=28)
-        self.f_rescue_matrix.pack(fill="x", pady=JOURNEY_PADY)
+        self.lbl_rescue_progress.pack(fill="x", pady=(8, 4))
+        self.f_rescue_matrix = ctk.CTkFrame(body, fg_color="transparent", height=28)
+        self.f_rescue_matrix.pack(fill="x", pady=(0, 12))
         self.f_rescue_matrix.pack_propagate(False)
         self._populate_rescue_matrix([])
 
-        step3 = self._calm_step_frame(
-            journey,
-            3,
-            CALM_STEP3_TITLE,
-            "Choose how Golden Masters are organised before vault commit.",
-            grid_row=2,
-        )
-        self.seg_export_mode = ctk.CTkSegmentedButton(
-            step3,
-            values=["Standard Mode", "Intelligence Mode"],
-            variable=self.journey_export_mode,
-            font=FONT_CALM_SMALL,
-        )
-        self.seg_export_mode.pack(fill="x", pady=JOURNEY_PADY)
-
-        self.mode_var = tk.StringVar(value="Exact")
-        self.review_var = tk.BooleanVar(value=True)
-        self.notarise_var = tk.BooleanVar(value=True)
-
-        sec_run = ctk.CTkFrame(journey, fg_color="transparent")
-        sec_run.grid(row=3, column=0, sticky="ew", padx=2, pady=(STEP3_RUN_GAP, 0))
         self.btn_start = ctk.CTkButton(
-            sec_run,
-            text="Begin Rescue",
+            body,
+            text="Elevate & Vault",
             image=self.icons["play"],
             compound="left",
             fg_color=COLOR_SAFE,
             hover_color=COLOR_SAFE_HOVER,
             command=self.start_audit,
-            width=140,
-            height=28,
-            font=FONT_CALM_SMALL,
+            width=320,
+            height=56,
+            font=FONT_TITLE,
         )
-        self.btn_start.pack(side="left", padx=(0, 4))
+        self.btn_start.pack(pady=(8, 12))
+
+        controls = ctk.CTkFrame(body, fg_color="transparent")
+        controls.pack(fill="x")
         self.btn_pause = ctk.CTkButton(
-            sec_run, text="Pause", image=self.icons["pause"], compound="left",
+            controls, text="Pause", image=self.icons["pause"], compound="left",
             fg_color=COLOR_CAUTION, hover_color=COLOR_CAUTION_HOVER,
-            command=self.toggle_pause, state="disabled", width=80, height=28,
+            command=self.toggle_pause, state="disabled", width=100, height=32,
             font=FONT_CALM_SMALL,
         )
-        self.btn_pause.pack(side="left", padx=(0, 4))
+        self.btn_pause.pack(side="left", padx=(0, 8))
         self.btn_stop = ctk.CTkButton(
-            sec_run, text="Stop", image=self.icons["stop"], compound="left",
+            controls, text="Stop", image=self.icons["stop"], compound="left",
             fg_color=COLOR_DANGER, hover_color=COLOR_DANGER_HOVER,
-            command=self.stop_scan, state="disabled", width=80, height=28,
+            command=self.stop_scan, state="disabled", width=100, height=32,
             font=FONT_CALM_SMALL,
         )
         self.btn_stop.pack(side="left")
 
-    def _init_merge_tab(self):
-        self.m_master = tk.StringVar(value=self.settings["merge_master"])
-        self.m_inc = tk.StringVar(value=self.settings["merge_incoming"])
+    def _init_pro_studio_tab(self) -> None:
+        """Advanced configuration, vault index, merge, and maintenance."""
+        scroll = ctk.CTkScrollableFrame(self.t_pro, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=12, pady=12)
+
+        f_engine = self._section(
+            scroll, "Engine & safety",
+            hint="Tune hashing, collisions, and audit behaviour. Changes persist immediately.",
+            tight=True,
+        )
+        f_engine.columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(f_engine, text="Collision policy:", font=FONT_BODY).grid(
+            row=0, column=0, sticky="w", padx=(0, 12), pady=8,
+        )
+        self.collision_policy_var = tk.StringVar(value=self._collision_policy_label())
+        self.seg_collision = ctk.CTkSegmentedButton(
+            f_engine,
+            values=list(COLLISION_POLICY_LABELS),
+            variable=self.collision_policy_var,
+            command=self._apply_collision_policy,
+            font=FONT_CALM_SMALL,
+        )
+        self.seg_collision.grid(row=0, column=1, sticky="ew", pady=8)
+
+        ctk.CTkLabel(f_engine, text="Hashing depth:", font=FONT_BODY).grid(
+            row=1, column=0, sticky="w", padx=(0, 12), pady=8,
+        )
+        self.hashing_depth_var = tk.StringVar(value=self._hashing_depth_label())
+        self.opt_hashing = ctk.CTkOptionMenu(
+            f_engine,
+            values=list(HASHING_DEPTH_LABELS),
+            variable=self.hashing_depth_var,
+            command=self._apply_hashing_depth,
+            width=220,
+            font=FONT_BODY,
+        )
+        self.opt_hashing.grid(row=1, column=1, sticky="w", pady=8)
+
+        self._apply_hashing_depth(self.hashing_depth_var.get())
+
+        ctk.CTkLabel(f_engine, text="Export organisation:", font=FONT_BODY).grid(
+            row=2, column=0, sticky="nw", padx=(0, 12), pady=8,
+        )
+        export_holder = ctk.CTkFrame(f_engine, fg_color="transparent")
+        export_holder.grid(row=2, column=1, sticky="ew", pady=8)
+        self.seg_export_mode = ctk.CTkSegmentedButton(
+            export_holder,
+            values=["Standard Mode", "Intelligence Mode"],
+            variable=self.journey_export_mode,
+            command=lambda m: config.set("journey_export_mode", m),
+            font=FONT_CALM_SMALL,
+        )
+        self.seg_export_mode.pack(fill="x")
+
+        review_cb = ctk.CTkCheckBox(
+            f_engine,
+            text="Review duplicates after elevation",
+            variable=self.review_var,
+            font=FONT_BODY,
+            command=lambda: config.set("review_duplicates", self.review_var.get()),
+        )
+        review_cb.grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 2))
+        notarise_cb = ctk.CTkCheckBox(
+            f_engine,
+            text="Cryptographic notarisation (OpenTimestamps)",
+            variable=self.notarise_var,
+            font=FONT_BODY,
+            command=lambda: config.set("notarise", self.notarise_var.get()),
+        )
+        notarise_cb.grid(row=4, column=0, columnspan=2, sticky="w", pady=(2, 8))
+
+        f_scan = self._section(
+            scroll, "Scan parameters",
+            hint="Thread count and ignore rules used during elevation.",
+            tight=True,
+        )
+        f_scan.columnconfigure(1, weight=1)
+
+        lbl_threshold = ctk.CTkLabel(f_scan, text="Visual similarity threshold (0–20):", font=FONT_BODY)
+        lbl_threshold.grid(row=0, column=0, sticky="w", padx=(0, 12), pady=6)
+        self.threshold_var = tk.IntVar(value=config.get("threshold", 0))
+        ent_threshold = ctk.CTkEntry(f_scan, textvariable=self.threshold_var, width=120)
+        ent_threshold.grid(row=0, column=1, sticky="w", pady=6)
+        Tooltip(
+            lbl_threshold,
+            "Only used in Visual/Video mode. 0 = identical perceptual hash; "
+            "higher values match looser near-duplicates (8–12 is typical).",
+        )
+
+        ctk.CTkLabel(f_scan, text="Processing threads:", font=FONT_BODY).grid(
+            row=1, column=0, sticky="w", padx=(0, 12), pady=6,
+        )
+        self.threads_var = tk.IntVar(value=config.get("threads", 4))
+        ctk.CTkEntry(f_scan, textvariable=self.threads_var, width=120).grid(
+            row=1, column=1, sticky="w", pady=6,
+        )
+
+        ctk.CTkLabel(f_scan, text="Ignore extensions (e.g. .txt,.log):", font=FONT_BODY).grid(
+            row=2, column=0, sticky="w", padx=(0, 12), pady=6,
+        )
+        self.ignore_exts_var = tk.StringVar(value=config.get("ignore_exts", ""))
+        ctk.CTkEntry(f_scan, textvariable=self.ignore_exts_var).grid(
+            row=2, column=1, sticky="ew", pady=6,
+        )
+
+        ctk.CTkLabel(f_scan, text="Ignore folders (e.g. .git,cache):", font=FONT_BODY).grid(
+            row=3, column=0, sticky="w", padx=(0, 12), pady=6,
+        )
+        self.ignore_folders_var = tk.StringVar(value=config.get("ignore_folders", ""))
+        ctk.CTkEntry(f_scan, textvariable=self.ignore_folders_var).grid(
+            row=3, column=1, sticky="ew", pady=6,
+        )
+
+        self._init_merge_section(scroll)
+        self._init_datamine_section(scroll)
+
+        f_actions = self._section(scroll, "Configuration", tight=True)
+        btn_row = ctk.CTkFrame(f_actions, fg_color="transparent")
+        btn_row.pack(fill="x")
+        ctk.CTkButton(
+            btn_row, text="Save Settings", image=self.icons['save'], compound="left",
+            fg_color=COLOR_SAFE, hover_color=COLOR_SAFE_HOVER, command=self.save_settings,
+            height=38, font=FONT_BODY,
+        ).pack(side="left", expand=True, fill="x", padx=(0, 6))
+        ctk.CTkButton(
+            btn_row, text="Reset to Defaults", image=self.icons['refresh'], compound="left",
+            fg_color=COLOR_NEUTRAL, hover_color=COLOR_NEUTRAL_HOVER, command=self.reset_settings,
+            height=38, font=FONT_BODY,
+        ).pack(side="left", expand=True, fill="x", padx=(6, 0))
+
+        f_extras = self._section(scroll, "Application", tight=True)
+        extras_row = ctk.CTkFrame(f_extras, fg_color="transparent")
+        extras_row.pack(fill="x")
+        for label, cmd in (
+            ("Check for Updates", self.check_updates),
+            ("Create Shortcut", self.create_shortcut),
+            ("Report Bug", self.report_bug),
+        ):
+            ctk.CTkButton(
+                extras_row, text=label, fg_color=COLOR_NEUTRAL, hover_color=COLOR_NEUTRAL_HOVER,
+                command=cmd, height=36, font=FONT_BODY,
+            ).pack(side="left", expand=True, fill="x", padx=4)
+
+    def _init_merge_section(self, parent: Any) -> None:
+        self.m_master = tk.StringVar(value=config.get("merge_master", ""))
+        self.m_inc = tk.StringVar(value=config.get("merge_incoming", ""))
 
         sec = self._section(
-            self.t_merge, "Merge folders",
+            parent, "Merge folders",
             hint="Consolidate an incoming folder into a master folder, skipping "
                  "files that already exist there.",
         )
@@ -2474,7 +3028,7 @@ class DedupApp:
         ).pack(side="left", fill="x", expand=True, padx=(0, 10))
         ctk.CTkButton(
             master_row, text="Browse", image=self.icons['folder'], compound="left", width=110,
-            command=lambda: self.m_master.set(filedialog.askdirectory() or self.m_master.get()),
+            command=self._pick_merge_master,
         ).pack(side="left")
 
         ctk.CTkLabel(sec, text="Incoming folder (source):", font=FONT_BODY).pack(
@@ -2488,13 +3042,14 @@ class DedupApp:
         ).pack(side="left", fill="x", expand=True, padx=(0, 10))
         ctk.CTkButton(
             inc_row, text="Browse", image=self.icons['folder'], compound="left", width=110,
-            command=lambda: self.m_inc.set(filedialog.askdirectory() or self.m_inc.get()),
+            command=self._pick_merge_incoming,
         ).pack(side="left")
 
-        self.m_dry = tk.BooleanVar(value=True)
+        self.m_dry = tk.BooleanVar(value=bool(config.get("merge_dry_run", True)))
         dry_cb = ctk.CTkCheckBox(
             sec, text="Dry Run (simulate only — no files copied)",
             variable=self.m_dry, font=FONT_BODY,
+            command=lambda: config.set("merge_dry_run", self.m_dry.get()),
         )
         dry_cb.pack(anchor="w", pady=(6, 12))
         Tooltip(
@@ -2509,107 +3064,9 @@ class DedupApp:
             width=160, height=40, font=FONT_BODY,
         ).pack(anchor="w")
 
-    def _init_settings_tab(self):
-        # Scan parameters.
-        f = self._section(
-            self.t_settings, "Scan parameters",
-            hint="Tune how the audit engine reads and filters your files.",
-        )
-        f.columnconfigure(1, weight=1)
-
-        lbl_threshold = ctk.CTkLabel(f, text="Visual similarity threshold (0–20):", font=FONT_BODY)
-        lbl_threshold.grid(row=0, column=0, sticky="w", padx=(0, 12), pady=6)
-        self.threshold_var = tk.IntVar(value=self.settings.get('threshold', 0))
-        ent_threshold = ctk.CTkEntry(f, textvariable=self.threshold_var, width=120)
-        ent_threshold.grid(row=0, column=1, sticky="w", pady=6)
-        Tooltip(
-            lbl_threshold,
-            "Only used in Visual/Video mode. 0 = identical perceptual hash; "
-            "higher values match looser near-duplicates (8–12 is typical).",
-        )
-
-        ctk.CTkLabel(f, text="Processing threads:", font=FONT_BODY).grid(
-            row=1, column=0, sticky="w", padx=(0, 12), pady=6
-        )
-        self.threads_var = tk.IntVar(value=self.settings.get('threads', 4))
-        ctk.CTkEntry(f, textvariable=self.threads_var, width=120).grid(
-            row=1, column=1, sticky="w", pady=6
-        )
-
-        ctk.CTkLabel(f, text="Ignore extensions (e.g. .txt,.log):", font=FONT_BODY).grid(
-            row=2, column=0, sticky="w", padx=(0, 12), pady=6
-        )
-        self.ignore_exts_var = tk.StringVar(value=self.settings.get('ignore_exts', ''))
-        ctk.CTkEntry(f, textvariable=self.ignore_exts_var).grid(
-            row=2, column=1, sticky="ew", pady=6
-        )
-
-        ctk.CTkLabel(f, text="Ignore folders (e.g. .git,cache):", font=FONT_BODY).grid(
-            row=3, column=0, sticky="w", padx=(0, 12), pady=6
-        )
-        self.ignore_folders_var = tk.StringVar(value=self.settings.get('ignore_folders', ''))
-        ctk.CTkEntry(f, textvariable=self.ignore_folders_var).grid(
-            row=3, column=1, sticky="ew", pady=6
-        )
-
-        # Persist / reset.
-        f_actions = self._section(self.t_settings, "Configuration")
-        btn_row = ctk.CTkFrame(f_actions, fg_color="transparent")
-        btn_row.pack(fill="x")
-        ctk.CTkButton(
-            btn_row, text="Save Settings", image=self.icons['save'], compound="left",
-            fg_color=COLOR_SAFE, hover_color=COLOR_SAFE_HOVER, command=self.save_settings,
-            height=38, font=FONT_BODY,
-        ).pack(side="left", expand=True, fill="x", padx=(0, 6))
-        ctk.CTkButton(
-            btn_row, text="Reset to Defaults", image=self.icons['refresh'], compound="left",
-            fg_color=COLOR_NEUTRAL, hover_color=COLOR_NEUTRAL_HOVER, command=self.reset_settings,
-            height=38, font=FONT_BODY,
-        ).pack(side="left", expand=True, fill="x", padx=(6, 0))
-
-        # Application utilities.
-        f_extras = self._section(self.t_settings, "Application")
-        extras_row = ctk.CTkFrame(f_extras, fg_color="transparent")
-        extras_row.pack(fill="x")
-        for label, cmd in (
-            ("Check for Updates", self.check_updates),
-            ("Create Shortcut", self.create_shortcut),
-            ("Report Bug", self.report_bug),
-        ):
-            ctk.CTkButton(
-                extras_row, text=label, fg_color=COLOR_NEUTRAL, hover_color=COLOR_NEUTRAL_HOVER,
-                command=cmd, height=36, font=FONT_BODY,
-            ).pack(side="left", expand=True, fill="x", padx=4)
-
-    def _init_datamine_tab(self):
-        # Danger / maintenance zone pinned to the bottom (built first so it
-        # reserves space before the fill region above it).
-        self.f_danger_zone = ctk.CTkFrame(self.t_datamine)
-        self.f_danger_zone.pack(side='bottom', fill='x', padx=20, pady=(0, 15))
-
-        ctk.CTkLabel(
-            self.f_danger_zone, text='Recovery & Maintenance',
-            font=("Segoe UI", 12, "bold"), text_color=COLOR_CAUTION,
-        ).pack(anchor='w', padx=15, pady=(10, 4))
-
-        danger_row = ctk.CTkFrame(self.f_danger_zone, fg_color="transparent")
-        danger_row.pack(fill="x", padx=15, pady=(0, 12))
-        self.btn_revert = ctk.CTkButton(
-            danger_row, text='Revert Last Vault Commit', command=self.revert_last_archive,
-            fg_color=COLOR_NEUTRAL, hover_color=COLOR_NEUTRAL_HOVER, height=36, font=FONT_BODY,
-        )
-        self.btn_revert.pack(side='left', padx=(0, 8))
-        Tooltip(self.btn_revert, "Undo the most recent vault commit, restoring copied vault records to their original locations.")
-        self.btn_clear_log = ctk.CTkButton(
-            danger_row, text='Clear Transaction Log', command=self.clear_archive_history,
-            fg_color=COLOR_NEUTRAL, hover_color=COLOR_NEUTRAL_HOVER, height=36, font=FONT_BODY,
-        )
-        self.btn_clear_log.pack(side='left')
-        Tooltip(self.btn_clear_log, "Permanently delete the vault transaction history. Revert will no longer be possible afterwards.")
-
-        # Summary card (top).
-        f_card = ctk.CTkFrame(self.t_datamine)
-        f_card.pack(side='top', fill="x", padx=20, pady=(15, 0))
+    def _init_datamine_section(self, parent: Any) -> None:
+        f_card = ctk.CTkFrame(parent, corner_radius=8)
+        f_card.pack(fill="x", pady=(0, 10))
 
         ctk.CTkLabel(f_card, text="Vault Index Summary", font=FONT_TITLE).pack(
             anchor="w", padx=15, pady=(14, 8)
@@ -2632,25 +3089,25 @@ class DedupApp:
         self.btn_rationalize.pack(anchor="w", padx=15, pady=(0, 14))
         Tooltip(self.btn_rationalize, "Recompute which copy of each file is the 'golden' (kept) version and refresh the summary above.")
 
-        # Vault commit action card.
         f_archive = self._section(
-            self.t_datamine, "Commit to Vault",
+            parent, "Commit to Vault",
             hint="Safely copy legacy records into your vault location in one pass. Source files stay put.",
+            tight=True,
         )
-        self.archive_dry_run_var = tk.BooleanVar(value=True)
-        archive_dry_cb = ctk.CTkCheckBox(
+        self.simulate_only_var = tk.BooleanVar(value=self._simulate_only_from_config())
+        simulate_cb = ctk.CTkCheckBox(
             f_archive,
-            text="Audit Validation (Safety First)",
-            variable=self.archive_dry_run_var,
+            text="Simulate Only (No File Transfer)",
+            variable=self.simulate_only_var,
             font=FONT_BODY,
+            command=self._sync_simulate_only_config,
         )
-        archive_dry_cb.pack(anchor="w", pady=(0, 4))
+        simulate_cb.pack(anchor="w", pady=(0, 4))
         ctk.CTkLabel(
             f_archive,
             text=(
-                "We are careful with your data. Preview the exact structural changes "
-                "and generate a manifest. The engine is non-destructive: your original "
-                "files are NEVER moved or deleted."
+                "The manifest is always generated during elevation. Enable this to catalog "
+                "without copying files into the vault. Your originals are never moved or deleted."
             ),
             font=FONT_CALM_SMALL,
             text_color=COLOR_HINT,
@@ -2659,8 +3116,8 @@ class DedupApp:
             wraplength=820,
         ).pack(anchor="w", padx=(24, 0), pady=(0, 10))
         Tooltip(
-            archive_dry_cb,
-            "Run Commit to Vault in validation mode first (recommended). Non-destructive: originals stay put.",
+            simulate_cb,
+            "When enabled, PLAN (audit + manifest) runs but EXECUTE (vault copy) is skipped.",
         )
         ctk.CTkButton(
             f_archive, text="Commit to Vault", font=FONT_HEADER,
@@ -2668,13 +3125,35 @@ class DedupApp:
             height=42,
         ).pack(anchor="w")
 
-        # Recent golden files (fills remaining space).
-        ctk.CTkLabel(self.t_datamine, text="Recent Golden Files", font=FONT_HEADER).pack(
-            side='top', anchor="w", padx=20, pady=(15, 4)
+        ctk.CTkLabel(parent, text="Recent Golden Files", font=FONT_HEADER).pack(
+            anchor="w", pady=(12, 4),
         )
-        self.txt_golden = ctk.CTkTextbox(self.t_datamine)
-        self.txt_golden.pack(side='top', fill="both", expand=True, padx=20, pady=(0, 15))
+        self.txt_golden = ctk.CTkTextbox(parent, height=140)
+        self.txt_golden.pack(fill="x", pady=(0, 12))
         self.txt_golden.configure(state="disabled")
+
+        self.f_danger_zone = ctk.CTkFrame(parent, corner_radius=8)
+        self.f_danger_zone.pack(fill="x", pady=(0, 8))
+
+        ctk.CTkLabel(
+            self.f_danger_zone, text='Recovery & Maintenance',
+            font=("Segoe UI", 12, "bold"), text_color=COLOR_CAUTION,
+        ).pack(anchor='w', padx=15, pady=(10, 4))
+
+        danger_row = ctk.CTkFrame(self.f_danger_zone, fg_color="transparent")
+        danger_row.pack(fill="x", padx=15, pady=(0, 12))
+        self.btn_revert = ctk.CTkButton(
+            danger_row, text='Revert Last Vault Commit', command=self.revert_last_archive,
+            fg_color=COLOR_NEUTRAL, hover_color=COLOR_NEUTRAL_HOVER, height=36, font=FONT_BODY,
+        )
+        self.btn_revert.pack(side='left', padx=(0, 8))
+        Tooltip(self.btn_revert, "Undo the most recent vault commit, restoring copied vault records to their original locations.")
+        self.btn_clear_log = ctk.CTkButton(
+            danger_row, text='Clear Transaction Log', command=self.clear_archive_history,
+            fg_color=COLOR_NEUTRAL, hover_color=COLOR_NEUTRAL_HOVER, height=36, font=FONT_BODY,
+        )
+        self.btn_clear_log.pack(side='left')
+        Tooltip(self.btn_clear_log, "Permanently delete the vault transaction history. Revert will no longer be possible afterwards.")
 
         self.update_datamine_stats()
 
@@ -2822,7 +3301,7 @@ class DedupApp:
             messagebox.showerror("Error", f"Insufficient disk space!\n\nRequired: {req_gb:.2f} GB\nAvailable: {free_gb:.2f} GB")
             return
 
-        is_dry_run = self.archive_dry_run_var.get()
+        is_dry_run = self.simulate_only_var.get()
         msg = (
             f"Found {popup_count} legacy copies. Verified Golden Masters remain in place.\n\n"
             f"Ready to safely COPY records to the Vault at:\n{isolation_path}\n\n"
@@ -2882,7 +3361,7 @@ class DedupApp:
                         if is_dry_run:
                             simulated_moves.add(str(dest_file))
                         else:
-                            shutil.copy2(str(src_path), str(dest_file))
+                            self._shutil_copy_from_config()(str(src_path), str(dest_file))
                             with self.db_manager.conn:
                                 self.db_manager.conn.execute("UPDATE file_index SET full_path = ?, status = 'archived', pre_archive_path = ?, archive_transaction_id = ? WHERE rowid = ?", (str(dest_file), str(src_path), transaction_id, rowid))
                         
@@ -3012,86 +3491,22 @@ class DedupApp:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to clear history: {e}")
 
-    def start_audit(self):
-        vault_export_root = self._require_destination_vault()
-        if vault_export_root is None:
-            return
-
+    def start_audit(self) -> None:
+        """One-click Elevate & Vault: config-driven PLAN → EXECUTE with no blocking dialogs."""
+        src = self.src_var.get().strip()
+        if src:
+            config.set("last_source", src)
+        vault = self.target_vault_dir.get().strip()
+        if vault:
+            config.set("vault_path", vault)
         self.stop_event.clear()
         self.pause_event.set()
         self.btn_start.configure(state="disabled")
         self.btn_stop.configure(state="normal")
         self.btn_pause.configure(state="normal", text="Pause")
-        
         self.current_session_id = str(uuid.uuid4())
-        
-        cls = VideoFileAuditor if self.mode_var.get() == "Visual/Video" else FileAuditor
-
-        ignore_exts = [e.strip() for e in self.settings.get('ignore_exts', '').split(',') if e.strip()]
-        ignore_folders = [f.strip() for f in self.settings.get('ignore_folders', '').split(',') if f.strip()]
-
-        auditor = cls(self.src_var.get(), log_callback=self.log, progress_callback=self.progress,
-                      review_mode=self.review_var.get(), stop_event=self.stop_event, pause_event=self.pause_event, threshold=self.settings.get('threshold', 0),
-                      threads=self.settings.get('threads', 4), ignore_exts=ignore_exts, ignore_folders=ignore_folders, db_manager=self.db_manager, session_id=self.current_session_id)
-        def run():
-            try:
-                auditor.run()
-                
-                stats = self.db_manager.identify_golden_versions(session_id=self.current_session_id)
-                
-                active_path = self.src_var.get()
-                folder_name = os.path.basename(os.path.normpath(active_path))
-                with self.db_manager.conn:
-                    cur = self.db_manager.conn.cursor()
-                    cur.execute("SELECT COUNT(*) FROM file_index WHERE is_golden = 0 AND full_path LIKE ?", (f"%{folder_name}%",))
-                    local_count = cur.fetchone()[0]
-                
-                if self.notarise_var.get():
-                    try:
-                        notary = DedupNotary(self.db_path)
-                        notary_thread = threading.Thread(target=notary.batch_submit_unnotarised, daemon=True)
-                        notary_thread.start()
-                    except Exception as e:
-                        import sys
-                        print(f"Failed to initialize notary background thread: {e}", file=sys.stderr)
-                else:
-                    self.log("Notarisation skipped (disabled in audit options).")
-
-                # Weave unique files into the Obsidian knowledge graph and route
-                # anchoring through the cloud gateway. Best-effort and isolated:
-                # any failure here must never abort the audit conclusion.
-                try:
-                    kg_thread = threading.Thread(
-                        target=self.export_knowledge_graph,
-                        args=(self.current_session_id, active_path, vault_export_root),
-                        daemon=True,
-                    )
-                    kg_thread.start()
-                except Exception as e:
-                    self.log(f"Failed to start knowledge graph export: {e}")
-
-                self.root.after(0, self.update_datamine_stats)
-                
-                if self.review_var.get():
-                    groups, total = self.db_manager.get_duplicate_groups(scan_mode=self.mode_var.get(), threshold=self.settings.get('threshold', 0), limit=100, offset=0, session_id=self.current_session_id)
-                    if local_count > 0:
-                        msg = (
-                            f"Ingestion complete. {local_count} legacy copies identified in this session. "
-                            f"Verified Golden Masters are indexed. Review manually or Commit to Vault "
-                            f"in The Vault Index tab."
-                        )
-                        self.root.after(0, lambda m=msg: messagebox.showinfo("Ingestion Complete", m))
-                    else:
-                        self.log("Ingestion complete. Verified Golden Masters ready in The Vault Index.")
-                        self.root.after(0, lambda: messagebox.showinfo(
-                            "Ingestion Complete",
-                            "Ingestion complete. Verified Golden Masters are ready in The Vault Index.",
-                        ))
-            except Exception as e:
-                self.log(f"Error during scan: {e}")
-            finally:
-                self.root.after(0, self.reset_scan_buttons)
-        threading.Thread(target=run, daemon=True).start()
+        self._set_elevation_status("Starting elevation…")
+        threading.Thread(target=self._run_elevation_pipeline, daemon=True).start()
 
     def export_knowledge_graph(
         self,
@@ -3123,7 +3538,7 @@ class DedupApp:
 
     def _show_review(self, groups, total, hash_cache):
         self.review_dialog = ReviewDialog(self.root, groups, total, self.db_manager, self.mode_var.get(), precomputed_hashes=hash_cache, 
-                                          threshold=self.settings.get('threshold', 5))
+                                          threshold=config.get("threshold", 5))
 
     def start_merge(self):
         merger = FolderMerger(self.m_master.get(), self.m_inc.get(), log_callback=self.log, progress_callback=self.progress, dry_run=self.m_dry.get(), db_manager=self.db_manager)
@@ -3135,13 +3550,13 @@ class DedupApp:
     def on_close(self):
         self.stop_event.set() # Signal any running threads to stop
         self.pause_event.set() # Unpause to allow threads to exit
-        self.settings.update({
+        config.update({
             "last_source": self.src_var.get(),
-            "last_dest": self.target_vault_dir.get(),
+            "vault_path": self.target_vault_dir.get(),
             "merge_master": self.m_master.get(),
             "merge_incoming": self.m_inc.get(),
+            "journey_export_mode": self.journey_export_mode.get(),
         })
-        self.cfg.save(self.settings)
         self.db_manager.close()
         self.root.destroy()
         os._exit(0) # Forcefully and safely release the terminal prompt back to the user
@@ -3167,11 +3582,19 @@ class DedupApp:
         self.btn_pause.configure(state="disabled", text="Pause")
 
     def save_settings(self):
-        self.settings['threshold'] = self.threshold_var.get()
-        self.settings['threads'] = self.threads_var.get()
-        self.settings['ignore_exts'] = self.ignore_exts_var.get()
-        self.settings['ignore_folders'] = self.ignore_folders_var.get()
-        self.cfg.save(self.settings)
+        config.set("threshold", self.threshold_var.get())
+        config.set("threads", self.threads_var.get())
+        config.set("ignore_exts", self.ignore_exts_var.get())
+        config.set("ignore_folders", self.ignore_folders_var.get())
+        if hasattr(self, "collision_policy_var"):
+            self._apply_collision_policy(self.collision_policy_var.get())
+        if hasattr(self, "hashing_depth_var"):
+            self._apply_hashing_depth(self.hashing_depth_var.get())
+        config.set("review_duplicates", self.review_var.get())
+        config.set("notarise", self.notarise_var.get())
+        config.set("journey_export_mode", self.journey_export_mode.get())
+        if hasattr(self, "simulate_only_var"):
+            self._sync_simulate_only_config()
         messagebox.showinfo("Settings", "Settings saved successfully.")
 
     def check_updates(self):
@@ -3236,12 +3659,28 @@ class DedupApp:
 
     def reset_settings(self):
         if messagebox.askyesno("Reset Settings", "Are you sure you want to reset all settings to their defaults?"):
-            self.settings = self.cfg.defaults.copy()
-            self.threshold_var.set(self.settings['threshold'])
-            self.threads_var.set(self.settings['threads'])
-            self.ignore_exts_var.set(self.settings['ignore_exts'])
-            self.ignore_folders_var.set(self.settings['ignore_folders'])
-            messagebox.showinfo("Settings", "Settings reset to defaults. Click 'Save Settings' to persist changes.")
+            config.reset_to_defaults()
+            defaults = config.defaults()
+            self.threshold_var.set(defaults["threshold"])
+            self.threads_var.set(defaults["threads"])
+            self.ignore_exts_var.set(defaults["ignore_exts"])
+            self.ignore_folders_var.set(defaults["ignore_folders"])
+            if hasattr(self, "collision_policy_var"):
+                label = self._collision_policy_label()
+                self.collision_policy_var.set(label)
+                self._apply_collision_policy(label)
+            if hasattr(self, "hashing_depth_var"):
+                label = self._hashing_depth_label()
+                self.hashing_depth_var.set(label)
+                self._apply_hashing_depth(label)
+            self.journey_export_mode.set(defaults.get("journey_export_mode", "Standard Mode"))
+            self.review_var.set(True)
+            self.notarise_var.set(True)
+            if hasattr(self, "simulate_only_var"):
+                self.simulate_only_var.set(defaults.get("simulate_only", False))
+                self._sync_simulate_only_config()
+            self._sync_vault_path_display()
+            messagebox.showinfo("Settings", "Settings reset to defaults.")
 
 def _obsidian_source_folder_label(source_path: str) -> str:
     """Sanitised basename of the scanned source tree for vault nesting."""
