@@ -45,7 +45,9 @@ try:
     from PIL import Image, ImageDraw
     import cv2
     import imagehash
+    import cairosvg
 except ImportError:
+    print("Missing dependencies. Run: pip install pillow opencv-python-headless imagehash cairosvg")
     print("Missing dependencies. Run: pip install pillow opencv-python-headless imagehash")
     sys.exit(1)
 
@@ -2739,6 +2741,9 @@ class DedupApp:
                 final_dest_path = os.path.join(str(dest_file.parent), os.path.basename(str(src_path)))
                 shutil.copy2(str(src_path), final_dest_path)
                 rel = Path(final_dest_path).relative_to(vault_source_root).as_posix()
+                    final_dest_path = os.path.join(str(dest_file.parent), os.path.basename(str(src_path)))
+                    shutil.copy2(str(src_path), final_dest_path)
+                    rel = Path(final_dest_path).relative_to(vault_source_root).as_posix()
                     vaulted_relpaths.append(rel)
                     size_mb = f"{(size or 0) / (1024 * 1024):.2f}"
                     csv_entries.append([
@@ -2746,6 +2751,7 @@ class DedupApp:
                         src_path.name,
                         str(src_path),
                     final_dest_path,
+                        final_dest_path,
                         time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime_val)),
                         size_mb,
                         transaction_id,
