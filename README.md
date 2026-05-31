@@ -113,6 +113,33 @@ The ingest path (`pipeline.py` + `ingest_kernel.py`) separates CPU-bound hashing
 
 **Design goals:** maximise throughput on multi-core hosts, keep the GUI responsive during large audits, and ensure every database commit is atomic with its cryptographic proof.
 
+#### Production vault export & chronological naming
+
+`run_production.py` (with `--tree-mode` / `--hierarchical`) classifies golden files, copies raw assets into dated vault folders (`YYYY/YYYY-MM-DD/`), and writes Obsidian sidecar notes. When trustworthy creation metadata is available, exported filenames use:
+
+`YYYY-MM-DD-[Original_Name].[ext]`
+
+##### Chronological Naming Fallback Protocol
+
+When ingest metadata is **missing or corrupted** (common on legacy optical media, truncated EXIF, zeroed timestamps, or pre-1980 epoch values), DedupSuite **must not invent a calendar date**. The pipeline switches to a deterministic, content-anchored fallback stem:
+
+`[Folder Depth Level]_[Unique Content SHA-256 Hash]`
+
+| Token | Meaning |
+|---|---|
+| **Folder Depth Level** | Non-negative index into the source folder graph (`0`, `01`, `1`, …). `0` is the scan root; each additional path segment increments depth. |
+| **Unique Content SHA-256 Hash** | Short, stable prefix of the file's SHA-256 digest (e.g. `0ef1fdf7`), guaranteeing identity even when display names collide. |
+
+**Example fallback basename:** `0_0ef1fdf7` → a golden file at scan-root depth whose hash prefix is `0ef1fdf7`.
+
+**Why this exists**
+
+- **Prevents false timestamping** — no synthetic `YYYY-MM-DD` labels that would misfile assets in the vault timeline.
+- **Safeguards data** — every object remains addressable, deduplicable, and notarisable by content hash.
+- **Preserves auditability** — operators can distinguish metadata-blackout exports from true chronological exports at a glance.
+
+**Implementation note:** `db_ingest.build_note_basename()` emits vault-safe stems as `Depth_{hash8}-[Original_Name]` when `extract_creation_date()` returns `None`. The `Depth_` prefix and hyphenated original stem are filesystem/Obsidian normalisation; the depth index and hash tokens above remain the canonical logical identity. See `docs/TDA.md` for the formal resolution framework.
+
 ### Layer 2 — Ed25519 Cryptographic Integrity Layer
 
 After each batch is hashed, the consumer signs a canonical JSON manifest (`crypto_gate.py`):
@@ -174,7 +201,9 @@ A passing scan (`IntegrityCheck.scan() == True`) confirms that every committed i
 | `dedup_suite.py` | GUI application and orchestration |
 | `pipeline.py` | Producer/consumer concurrent ingest |
 | `ingest_kernel.py` | Per-file streaming SHA-256 worker |
-| `db_ingest.py` | SQLite batch writes and signature persistence |
+| `db_ingest.py` | SQLite batch writes, vault export, and naming fallback |
+| `run_production.py` | Production ingest, hierarchical vault export, and notary |
+| `docs/TDA.md` | Technical Design Architecture (naming & verification specs) |
 | `crypto_gate.py` | Ed25519 signing gate (OS vault backed) |
 | `integrity_check.py` | On-demand signature verification |
 | `core/` | Notary and knowledge-graph export |
