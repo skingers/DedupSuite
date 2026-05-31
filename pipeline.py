@@ -228,7 +228,7 @@ def run_pipeline(
     stop_event: Optional[threading.Event] = None,
     pause_event: Optional[threading.Event] = None,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
-    trial_golden_limit: Optional[int] = db_ingest.TRIAL_GOLDEN_LIMIT,
+    trial_golden_limit: Optional[int] = None,
 ) -> Tuple[float, int, List[Row]]:
     """Run the concurrent pipeline.
 

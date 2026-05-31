@@ -1663,6 +1663,7 @@ FONT_CALM_STEP = ("Segoe UI", 14, "bold")
 FONT_CALM_BODY = ("Segoe UI", 12)
 FONT_CALM_SMALL = ("Segoe UI", 10)
 JOURNEY_PADY = 0
+STEP3_RUN_GAP = 8
 
 CALM_STEP1_TITLE = "Map the Swamp"
 CALM_STEP2_TITLE = "Secure the Gold"
@@ -1781,7 +1782,7 @@ class DedupApp:
         self.pbar.pack(fill="x", padx=20, pady=(0, 20))
         self.pbar.set(0)
 
-        self.journey_export_mode = tk.StringVar(value="standard")
+        self.journey_export_mode = tk.StringVar(value="Standard Mode")
 
         self._init_audit_tab()
         self._init_merge_tab()
@@ -2235,17 +2236,6 @@ class DedupApp:
         for col in range(columns):
             self.f_rescue_matrix.columnconfigure(col, weight=1)
 
-    def _select_journey_export_mode(self, mode: str) -> None:
-        self.journey_export_mode.set(mode)
-        self._refresh_journey_mode_cards()
-
-    def _refresh_journey_mode_cards(self) -> None:
-        active = self.journey_export_mode.get()
-        standard_border = 2 if active == "standard" else 0
-        intel_border = 2 if active == "intelligence" else 0
-        self.card_standard.configure(border_width=standard_border, border_color=COLOR_INFO)
-        self.card_intelligence.configure(border_width=intel_border, border_color=COLOR_INFO)
-
     def _calm_step_frame(
         self,
         parent: Any,
@@ -2355,55 +2345,20 @@ class DedupApp:
             "Pick how rescued masters are organised.",
             grid_row=2,
         )
-        modes_row = ctk.CTkFrame(step3, fg_color="transparent")
-        modes_row.pack(fill="x", pady=JOURNEY_PADY)
-        modes_row.columnconfigure(0, weight=1)
-        modes_row.columnconfigure(1, weight=1)
-
-        self.card_standard = ctk.CTkFrame(
-            modes_row, corner_radius=6, border_width=2, border_color=COLOR_INFO,
-            cursor="hand2", height=44,
-        )
-        self.card_standard.grid(row=0, column=0, sticky="ew", padx=(0, 3), pady=JOURNEY_PADY)
-        self.card_standard.grid_propagate(False)
-        ctk.CTkLabel(
-            self.card_standard,
-            text="Standard Mode — chronological folders",
+        self.seg_export_mode = ctk.CTkSegmentedButton(
+            step3,
+            values=["Standard Mode", "Intelligence Mode"],
+            variable=self.journey_export_mode,
             font=FONT_CALM_SMALL,
-            wraplength=360,
-            justify="left",
-        ).pack(anchor="w", padx=6, pady=JOURNEY_PADY)
-
-        self.card_intelligence = ctk.CTkFrame(
-            modes_row, corner_radius=6, border_width=0, border_color=COLOR_INFO,
-            cursor="hand2", height=44,
         )
-        self.card_intelligence.grid(row=0, column=1, sticky="ew", padx=(3, 0), pady=JOURNEY_PADY)
-        self.card_intelligence.grid_propagate(False)
-        ctk.CTkLabel(
-            self.card_intelligence,
-            text="Intelligence Mode (PLM) — private off-grid AI prep",
-            font=FONT_CALM_SMALL,
-            text_color=COLOR_HINT,
-            wraplength=360,
-            justify="left",
-        ).pack(anchor="w", padx=6, pady=JOURNEY_PADY)
-
-        def _bind_mode_card(card: ctk.CTkFrame, mode: str) -> None:
-            card.bind("<Button-1>", lambda _e, m=mode: self._select_journey_export_mode(m))
-            for child in card.winfo_children():
-                child.bind("<Button-1>", lambda _e, m=mode: self._select_journey_export_mode(m))
-
-        _bind_mode_card(self.card_standard, "standard")
-        _bind_mode_card(self.card_intelligence, "intelligence")
-        self._refresh_journey_mode_cards()
+        self.seg_export_mode.pack(fill="x", pady=JOURNEY_PADY)
 
         self.mode_var = tk.StringVar(value="Exact")
         self.review_var = tk.BooleanVar(value=True)
         self.notarise_var = tk.BooleanVar(value=True)
 
         sec_run = ctk.CTkFrame(journey, fg_color="transparent")
-        sec_run.grid(row=3, column=0, sticky="ew", padx=2, pady=JOURNEY_PADY)
+        sec_run.grid(row=3, column=0, sticky="ew", padx=2, pady=(STEP3_RUN_GAP, 0))
         self.btn_start = ctk.CTkButton(
             sec_run,
             text="Begin Rescue",

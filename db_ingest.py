@@ -87,11 +87,8 @@ def assert_trial_capacity(
     db_conn: sqlite3.Connection,
     limit: int = TRIAL_GOLDEN_LIMIT,
 ) -> None:
-    """Raise :class:`TrialLimitExceededError` when the golden cap is already met."""
-    if get_golden_file_count(db_conn) >= limit:
-        raise TrialLimitExceededError(
-            f"Trial limit of {limit} Golden Files reached."
-        )
+    """No-op: golden-file trial cap removed (unlimited ingest)."""
+    del db_conn, limit
 
 
 def _classify_ingested_row(
@@ -143,7 +140,6 @@ def insert_batch_with_trial(
     for path, record in records:
         if record.get("status") != "success":
             continue
-        assert_trial_capacity(conn, trial_limit)
         meta = record["metadata"]
         file_hash = record["hash"]
         full_path = str(path)
