@@ -21,7 +21,7 @@ from tkinter import messagebox, filedialog
 import concurrent.futures
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 from check_db_v2 import ensure_blockchain_schema
 from core.notary import DedupNotary
 from core.markdown_translator import MarkdownTranslator, UniqueFileRecord
@@ -1659,6 +1659,14 @@ FONT_TITLE = ("Segoe UI", 20, "bold")
 FONT_HEADER = ("Segoe UI", 15, "bold")
 FONT_BODY = ("Segoe UI", 12)
 FONT_HINT = ("Segoe UI", 11)
+FONT_CALM_STEP = ("Segoe UI", 14, "bold")
+FONT_CALM_BODY = ("Segoe UI", 12)
+FONT_CALM_SMALL = ("Segoe UI", 10)
+JOURNEY_PADY = 0
+
+CALM_STEP1_TITLE = "Map the Swamp"
+CALM_STEP2_TITLE = "Secure the Gold"
+CALM_STEP3_TITLE = "Ignite Your Mind"
 
 
 class Tooltip:
@@ -1723,8 +1731,9 @@ class DedupApp:
     def __init__(self):
         self.root = ctk.CTk()
         self.root.title("DedupSuite — Deduplication & Cryptographic Notary")
+        self.root.minsize(1100, 700)
+        self.root.after(100, lambda: self.root.state('zoomed'))
         self._center_window(1100, 720)
-        self.root.minsize(940, 640)
         self.review_dialog = None
 
         # Set application window icon (brand mark) via the lazy asset cache.
@@ -1751,14 +1760,14 @@ class DedupApp:
         self.nb = ctk.CTkTabview(self.root)
         self.nb.pack(fill="both", expand=True)
         
-        self.t_audit = self.nb.add("Audit / Dedup")
+        self.t_audit = self.nb.add("Your Journey")
         self.t_merge = self.nb.add("Merge Folders")
-        self.t_settings = self.nb.add("Settings")
-        self.t_datamine = self.nb.add("Data Mine")
+        self.t_settings = self.nb.add("Expert Studio")
+        self.t_datamine = self.nb.add("The Vault Index")
         
         f_log = ctk.CTkFrame(self.root, fg_color="transparent")
         f_log.pack(fill="x", padx=20, pady=(10, 5))
-        ctk.CTkLabel(f_log, text="Activity Log:").pack(side="left", padx=5)
+        ctk.CTkLabel(f_log, text="Background notes:").pack(side="left", padx=5)
         ctk.CTkButton(f_log, text="Clear Log", image=self.icons['trash'], compound="left", fg_color="gray", command=self.clear_log, width=100).pack(side="right")
         self.btn_save_log = ctk.CTkButton(
             f_log, text="Save Log", image=self.icons['save'], compound="left",
@@ -1771,7 +1780,9 @@ class DedupApp:
         self.pbar = ctk.CTkProgressBar(self.root)
         self.pbar.pack(fill="x", padx=20, pady=(0, 20))
         self.pbar.set(0)
-        
+
+        self.journey_export_mode = tk.StringVar(value="standard")
+
         self._init_audit_tab()
         self._init_merge_tab()
         self._init_settings_tab()
@@ -2133,7 +2144,14 @@ class DedupApp:
         if tot > 0: self.pbar.set(cur/tot)
         self.root.title(f"Dedup Suite - {msg}")
 
-    def _section(self, parent: Any, title: str, hint: Optional[str] = None) -> Any:
+    def _section(
+        self,
+        parent: Any,
+        title: str,
+        hint: Optional[str] = None,
+        *,
+        tight: bool = False,
+    ) -> Any:
         """Create a titled "card" frame and return its content container.
 
         Provides consistent visual grouping: a bordered card, a bold header,
@@ -2144,105 +2162,273 @@ class DedupApp:
             parent: The widget to pack the card into.
             title: Section header text.
             hint: Optional muted one-line description shown under the header.
+            tight: When True, use minimal vertical gaps (audit journey steps).
 
         Returns:
             A transparent content frame inside the card for the caller's widgets.
         """
         card = ctk.CTkFrame(parent)
-        card.pack(fill="x", padx=20, pady=(15, 0))
+        card.pack(fill="x", padx=20, pady=(3, 0) if tight else (15, 0))
         ctk.CTkLabel(card, text=title, font=FONT_HEADER, anchor="w").pack(
-            fill="x", padx=15, pady=(12, 2)
+            fill="x", padx=15, pady=(4, 1) if tight else (12, 2)
         )
         if hint:
             ctk.CTkLabel(
                 card, text=hint, font=FONT_HINT, text_color=COLOR_HINT,
                 anchor="w", justify="left",
-            ).pack(fill="x", padx=15, pady=(0, 6))
+            ).pack(fill="x", padx=15, pady=(0, 2) if tight else (0, 6))
         content = ctk.CTkFrame(card, fg_color="transparent")
-        content.pack(fill="x", padx=15, pady=(0, 14))
+        content.pack(fill="x", padx=15, pady=(0, 3) if tight else (0, 14))
         return content
 
-    def _init_audit_tab(self):
-        # Step 1 — Target selection.
-        sec_target = self._section(
-            self.t_audit, "1   Select target folder",
-            hint="The folder tree that will be scanned for duplicate files.",
+    def _pick_source_folder(self) -> None:
+        chosen = filedialog.askdirectory(title="Choose the folder to rescue")
+        if chosen:
+            self.src_var.set(chosen)
+
+    def _bind_drop_target(self, widget: Any) -> None:
+        """Best-effort folder drag-and-drop on Windows; click-to-browse always works."""
+        widget.bind("<Button-1>", lambda _e: self._pick_source_folder())
+        try:
+            import windnd  # type: ignore[import-untyped]
+
+            def _on_drop(files: Any) -> None:
+                for raw in files:
+                    path = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+                    path = path.strip("{}")
+                    if os.path.isdir(path):
+                        self.src_var.set(path)
+                        return
+
+            windnd.hook_dropfiles(widget.winfo_toplevel(), func=_on_drop)
+        except ImportError:
+            pass
+
+    def _populate_rescue_matrix(self, paths: Sequence[Path], *, max_cells: int = 24) -> None:
+        """Render a compact grid of rescued master file names."""
+        for cell in self._rescue_matrix_cells:
+            cell.destroy()
+        self._rescue_matrix_cells.clear()
+        if not paths:
+            empty = ctk.CTkLabel(
+                self.f_rescue_matrix,
+                text="Your rescued masters will appear here as the Identity Scanner runs.",
+                font=FONT_CALM_SMALL,
+                text_color=COLOR_HINT,
+                wraplength=700,
+            )
+            empty.grid(row=0, column=0, columnspan=4, padx=4, pady=2, sticky="ew")
+            self._rescue_matrix_cells.append(empty)
+            return
+        columns = 4
+        for idx, path in enumerate(paths[:max_cells]):
+            tile = ctk.CTkFrame(self.f_rescue_matrix, corner_radius=6, height=36)
+            tile.grid(row=idx // columns, column=idx % columns, padx=3, pady=2, sticky="nsew")
+            ctk.CTkLabel(
+                tile,
+                text=path.name,
+                font=FONT_CALM_SMALL,
+                wraplength=160,
+                justify="center",
+            ).pack(expand=True, padx=4, pady=4)
+            self._rescue_matrix_cells.append(tile)
+        for col in range(columns):
+            self.f_rescue_matrix.columnconfigure(col, weight=1)
+
+    def _select_journey_export_mode(self, mode: str) -> None:
+        self.journey_export_mode.set(mode)
+        self._refresh_journey_mode_cards()
+
+    def _refresh_journey_mode_cards(self) -> None:
+        active = self.journey_export_mode.get()
+        standard_border = 2 if active == "standard" else 0
+        intel_border = 2 if active == "intelligence" else 0
+        self.card_standard.configure(border_width=standard_border, border_color=COLOR_INFO)
+        self.card_intelligence.configure(border_width=intel_border, border_color=COLOR_INFO)
+
+    def _calm_step_frame(
+        self,
+        parent: Any,
+        step_num: int,
+        title: str,
+        subtitle: str,
+        *,
+        grid_row: int,
+    ) -> ctk.CTkFrame:
+        """Compact step card; minimal vertical gap between journey steps."""
+        card = ctk.CTkFrame(parent, corner_radius=8)
+        card.grid(row=grid_row, column=0, sticky="ew", padx=4, pady=JOURNEY_PADY)
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.pack(fill="x", padx=8, pady=(2, 0))
+        ctk.CTkLabel(
+            head,
+            text=f"Step {step_num}",
+            font=FONT_CALM_SMALL,
+            text_color=COLOR_INFO,
+        ).pack(side="left")
+        ctk.CTkLabel(
+            head, text=title, font=FONT_CALM_STEP, anchor="w",
+        ).pack(side="left", padx=(6, 0))
+        ctk.CTkLabel(
+            card, text=subtitle, font=FONT_CALM_SMALL, text_color=COLOR_HINT,
+            anchor="w", justify="left", wraplength=820,
+        ).pack(fill="x", padx=8, pady=(0, JOURNEY_PADY))
+        body = ctk.CTkFrame(card, fg_color="transparent")
+        body.pack(fill="x", padx=8, pady=(0, JOURNEY_PADY))
+        return body
+
+    def _init_audit_tab(self) -> None:
+        """Calm 3-step journey — tight vertical spacing, no scroll."""
+        self._rescue_matrix_cells: list[Any] = []
+        journey = ctk.CTkFrame(self.t_audit, fg_color="transparent")
+        journey.pack(side="top", fill="x", anchor="n", padx=2, pady=0)
+        journey.grid_columnconfigure(0, weight=1)
+        for row in range(5):
+            journey.grid_rowconfigure(row, weight=0)
+
+        step1 = self._calm_step_frame(
+            journey,
+            1,
+            CALM_STEP1_TITLE,
+            "Point DedupSuite at the folder or drive that feels overwhelming. "
+            "We will walk it gently — no cloud uploads.",
+            grid_row=0,
         )
-        self.src_var = tk.StringVar(value=self.settings["last_source"])
+        self.src_var = tk.StringVar(value=self.settings.get("last_source", ""))
+        self.drop_zone = ctk.CTkFrame(
+            step1, height=72, corner_radius=14,
+            border_width=2, border_color=COLOR_NEUTRAL,
+            fg_color=("gray90", "#1E1E22"),
+        )
+        self.drop_zone.pack(fill="x", pady=JOURNEY_PADY)
+        self.drop_zone.pack_propagate(False)
+        ctk.CTkLabel(
+            self.drop_zone,
+            text="Click or drag a folder here",
+            font=FONT_CALM_BODY,
+        ).pack(expand=True)
+        ctk.CTkLabel(
+            self.drop_zone,
+            text="Choose the swamp you want to map",
+            font=FONT_CALM_SMALL,
+            text_color=COLOR_HINT,
+        ).pack(pady=(0, 4))
+        self._bind_drop_target(self.drop_zone)
+        path_row = ctk.CTkFrame(step1, fg_color="transparent")
+        path_row.pack(fill="x", pady=JOURNEY_PADY)
         ctk.CTkEntry(
-            sec_target, textvariable=self.src_var,
-            placeholder_text="Choose a folder to scan…",
-        ).pack(side="left", fill="x", expand=True, padx=(0, 10))
+            path_row, textvariable=self.src_var,
+            placeholder_text="Selected folder path…",
+            height=26, font=FONT_CALM_SMALL,
+        ).pack(side="left", fill="x", expand=True, padx=(0, 4))
         ctk.CTkButton(
-            sec_target, text="Browse", image=self.icons['folder'], compound="left",
-            width=110, command=lambda: self.src_var.set(filedialog.askdirectory()),
+            path_row, text="Browse", image=self.icons["folder"], compound="left",
+            width=90, height=26, command=self._pick_source_folder,
         ).pack(side="left")
 
-        # Step 2 — Detection mode & options.
-        sec_opts = self._section(
-            self.t_audit, "2   Detection mode & options",
-            hint="Choose how duplicates are detected and what happens after the scan.",
+        step2 = self._calm_step_frame(
+            journey,
+            2,
+            CALM_STEP2_TITLE,
+            "Identity Scanner distills clutter into pristine master copies.",
+            grid_row=1,
         )
-        sec_opts.columnconfigure(1, weight=1)
+        self.lbl_rescue_progress = ctk.CTkLabel(
+            step2,
+            text="Waiting to begin your rescue mission…",
+            font=FONT_CALM_SMALL,
+            text_color=COLOR_INFO,
+            anchor="w",
+            justify="left",
+            wraplength=820,
+        )
+        self.lbl_rescue_progress.pack(fill="x", pady=JOURNEY_PADY)
+        self.f_rescue_matrix = ctk.CTkFrame(step2, fg_color="transparent", height=28)
+        self.f_rescue_matrix.pack(fill="x", pady=JOURNEY_PADY)
+        self.f_rescue_matrix.pack_propagate(False)
+        self._populate_rescue_matrix([])
 
-        ctk.CTkLabel(sec_opts, text="Detection mode:", font=FONT_BODY).grid(
-            row=0, column=0, sticky="w", padx=(0, 12), pady=6
+        step3 = self._calm_step_frame(
+            journey,
+            3,
+            CALM_STEP3_TITLE,
+            "Pick how rescued masters are organised.",
+            grid_row=2,
         )
+        modes_row = ctk.CTkFrame(step3, fg_color="transparent")
+        modes_row.pack(fill="x", pady=JOURNEY_PADY)
+        modes_row.columnconfigure(0, weight=1)
+        modes_row.columnconfigure(1, weight=1)
+
+        self.card_standard = ctk.CTkFrame(
+            modes_row, corner_radius=6, border_width=2, border_color=COLOR_INFO,
+            cursor="hand2", height=44,
+        )
+        self.card_standard.grid(row=0, column=0, sticky="ew", padx=(0, 3), pady=JOURNEY_PADY)
+        self.card_standard.grid_propagate(False)
+        ctk.CTkLabel(
+            self.card_standard,
+            text="Standard Mode — chronological folders",
+            font=FONT_CALM_SMALL,
+            wraplength=360,
+            justify="left",
+        ).pack(anchor="w", padx=6, pady=JOURNEY_PADY)
+
+        self.card_intelligence = ctk.CTkFrame(
+            modes_row, corner_radius=6, border_width=0, border_color=COLOR_INFO,
+            cursor="hand2", height=44,
+        )
+        self.card_intelligence.grid(row=0, column=1, sticky="ew", padx=(3, 0), pady=JOURNEY_PADY)
+        self.card_intelligence.grid_propagate(False)
+        ctk.CTkLabel(
+            self.card_intelligence,
+            text="Intelligence Mode (PLM) — private off-grid AI prep",
+            font=FONT_CALM_SMALL,
+            text_color=COLOR_HINT,
+            wraplength=360,
+            justify="left",
+        ).pack(anchor="w", padx=6, pady=JOURNEY_PADY)
+
+        def _bind_mode_card(card: ctk.CTkFrame, mode: str) -> None:
+            card.bind("<Button-1>", lambda _e, m=mode: self._select_journey_export_mode(m))
+            for child in card.winfo_children():
+                child.bind("<Button-1>", lambda _e, m=mode: self._select_journey_export_mode(m))
+
+        _bind_mode_card(self.card_standard, "standard")
+        _bind_mode_card(self.card_intelligence, "intelligence")
+        self._refresh_journey_mode_cards()
+
         self.mode_var = tk.StringVar(value="Exact")
-        mode_menu = ctk.CTkOptionMenu(
-            sec_opts, variable=self.mode_var, values=["Exact", "Visual/Video"], width=170,
-        )
-        mode_menu.grid(row=0, column=1, sticky="w", pady=6)
-        Tooltip(
-            mode_menu,
-            "Exact: byte-for-byte SHA-256 matches (fast, lossless files).\n"
-            "Visual/Video: perceptual hashing to catch near-identical images "
-            "and videos even after re-encoding or resizing.",
-        )
-
         self.review_var = tk.BooleanVar(value=True)
-        review_cb = ctk.CTkCheckBox(
-            sec_opts, text="Review Mode", variable=self.review_var, font=FONT_BODY,
-        )
-        review_cb.grid(row=1, column=0, columnspan=2, sticky="w", pady=6)
-        Tooltip(
-            review_cb,
-            "Manually inspect and confirm each duplicate group before anything "
-            "is moved or deleted. Strongly recommended — leave on unless you "
-            "trust automatic resolution.",
-        )
-
         self.notarise_var = tk.BooleanVar(value=True)
-        notarise_cb = ctk.CTkCheckBox(
-            sec_opts, text="Notarise results (OpenTimestamps)",
-            variable=self.notarise_var, font=FONT_BODY,
-        )
-        notarise_cb.grid(row=2, column=0, columnspan=2, sticky="w", pady=6)
-        Tooltip(
-            notarise_cb,
-            "After the audit, anchor cryptographic proofs of your unique "
-            "(golden) files to public blockchain calendars so their existence "
-            "and integrity can be independently verified later.",
-        )
 
-        # Step 3 — Execution controls.
-        sec_run = self._section(self.t_audit, "3   Run audit")
+        sec_run = ctk.CTkFrame(journey, fg_color="transparent")
+        sec_run.grid(row=3, column=0, sticky="ew", padx=2, pady=JOURNEY_PADY)
         self.btn_start = ctk.CTkButton(
-            sec_run, text="Start Scan", image=self.icons['play'], compound="left",
-            fg_color=COLOR_SAFE, hover_color=COLOR_SAFE_HOVER, command=self.start_audit,
-            width=150, height=40, font=FONT_BODY,
+            sec_run,
+            text="Begin Rescue",
+            image=self.icons["play"],
+            compound="left",
+            fg_color=COLOR_SAFE,
+            hover_color=COLOR_SAFE_HOVER,
+            command=self.start_audit,
+            width=140,
+            height=28,
+            font=FONT_CALM_SMALL,
         )
-        self.btn_start.pack(side="left", padx=(0, 10))
+        self.btn_start.pack(side="left", padx=(0, 4))
         self.btn_pause = ctk.CTkButton(
-            sec_run, text="Pause", image=self.icons['pause'], compound="left",
+            sec_run, text="Pause", image=self.icons["pause"], compound="left",
             fg_color=COLOR_CAUTION, hover_color=COLOR_CAUTION_HOVER,
-            command=self.toggle_pause, state="disabled", width=120, height=40, font=FONT_BODY,
+            command=self.toggle_pause, state="disabled", width=80, height=28,
+            font=FONT_CALM_SMALL,
         )
-        self.btn_pause.pack(side="left", padx=(0, 10))
+        self.btn_pause.pack(side="left", padx=(0, 4))
         self.btn_stop = ctk.CTkButton(
-            sec_run, text="Stop", image=self.icons['stop'], compound="left",
+            sec_run, text="Stop", image=self.icons["stop"], compound="left",
             fg_color=COLOR_DANGER, hover_color=COLOR_DANGER_HOVER,
-            command=self.stop_scan, state="disabled", width=120, height=40, font=FONT_BODY,
+            command=self.stop_scan, state="disabled", width=80, height=28,
+            font=FONT_CALM_SMALL,
         )
         self.btn_stop.pack(side="left")
 
