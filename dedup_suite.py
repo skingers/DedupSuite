@@ -714,7 +714,7 @@ class FileAuditor:
                             continue
                         target = self.move_to / dupe.relative_to(self.root_path)
                         target.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.move(str(dupe), str(target))
+                        shutil.copy2(str(dupe), str(target))
                 except (OSError, shutil.Error) as e:
                     self.log(f"Error processing {dupe.name}: {e}")
             self.log(f"  {'Deleted' if self.delete else 'Copied'}: {dupe.name}")
@@ -920,7 +920,7 @@ class FolderMerger:
                 return
             dest = self.quarantine_path / p.relative_to(self.incoming_root)
             dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(p), str(dest))
+            shutil.copy2(str(p), str(dest))
         self.log(f"Duplicate: {p.name}")
 
     def _merge(self, p: Path) -> None:
@@ -936,7 +936,7 @@ class FolderMerger:
         
         if not self.dry_run:
             dest.parent.mkdir(parents=True, exist_ok=True)
-            if self.mode == "move": shutil.move(str(p), str(dest))
+            if self.mode == "move": shutil.copy2(str(p), str(dest))
             else: shutil.copy2(str(p), str(dest))
         else: self.simulated_paths.add(str(dest))
         self.stats['merged'] += 1
@@ -1142,7 +1142,7 @@ class ReviewDialog:
             if not dupe.exists(): continue
             try:
                 tmp = self.temp_dir / f"{uuid.uuid4()}_{dupe.name}"
-                shutil.move(str(dupe), str(tmp))
+                shutil.copy2(str(dupe), str(tmp))
                 operations.append((tmp, dupe))
                 count += 1
             except Exception as e: print(f"Error deleting {dupe}: {e}")
@@ -1184,7 +1184,7 @@ class ReviewDialog:
                 
                 dest_file = sub_folder / dupe.name
                 if dest_file.exists(): dest_file = sub_folder / f"{dupe.stem}_{int(time.time())}_{i}{dupe.suffix}"
-                shutil.move(str(dupe), str(dest_file))
+                shutil.copy2(str(dupe), str(dest_file))
                 operations.append((dest_file, dupe))
                 count += 1
             except Exception as e: print(f"Error moving {dupe}: {e}")
@@ -1406,7 +1406,7 @@ class ReviewDialog:
     def delete_dupe(self):
         try:
             tmp = self.temp_dir / f"{uuid.uuid4()}_{self.dupe.name}"
-            shutil.move(str(self.dupe), str(tmp))
+            shutil.copy2(str(self.dupe), str(tmp))
             operations = [(tmp, self.dupe)]
             self.undo_stack.append((operations, self.current_index))
             self.next_pair()
@@ -1416,7 +1416,7 @@ class ReviewDialog:
         if self.undo_stack:
             operations, idx = self.undo_stack.pop()
             for src, dest in operations:
-                shutil.move(str(src), str(dest))
+                shutil.copy2(str(src), str(dest))
             self.current_index = idx
             self._load_pair()
 
@@ -1444,7 +1444,7 @@ class ReviewDialog:
             
             dest = sub_folder / self.dupe.name
             if dest.exists(): dest = sub_folder / f"{self.dupe.stem}_{int(time.time())}{self.dupe.suffix}"
-            shutil.move(str(self.dupe), str(dest))
+            shutil.copy2(str(self.dupe), str(dest))
             operations = [(dest, self.dupe)]
             self._save_target()
             self.undo_stack.append((operations, self.current_index))
@@ -2507,6 +2507,7 @@ class DedupApp:
         if policy == "overwrite":
             return dest_file
         counter = 2
+        isolation_path = os.path.join(vault_source_root, "Isolated_Legacy_Copies", os.path.basename(str(src_path)))
         while dest_file.exists() or str(dest_file) in reserved:
             dest_file = isolation_path / f"{src_path.stem}_v{counter}{src_path.suffix}"
             counter += 1
@@ -2730,40 +2731,42 @@ class DedupApp:
                     ])
                     continue
                 reserved_exec.add(str(dest_file))
-                try:
-                    if self.stop_event.is_set():
-                        aborted = True
-                        self.log("Aborted by User.")
-                        break
-                    dest_file.parent.mkdir(parents=True, exist_ok=True)
-                    mtime_val = mtime if mtime else os.path.getmtime(src_path)
+                if self.stop_event.is_set():
+                aborted = True
+                self.log("Aborted by User.")
+                break
+
+            try:
+                dest_file.parent.mkdir(parents=True, exist_ok=True)
+                mtime_val = mtime if mtime else os.path.getmtime(src_path)
                 
                 final_dest_path = os.path.join(str(dest_file.parent), os.path.basename(str(src_path)))
                 shutil.copy2(str(src_path), final_dest_path)
+                
                 rel = Path(final_dest_path).relative_to(vault_source_root).as_posix()
-                    final_dest_path = os.path.join(str(dest_file.parent), os.path.basename(str(src_path)))
-                    shutil.copy2(str(src_path), final_dest_path)
-                    rel = Path(final_dest_path).relative_to(vault_source_root).as_posix()
-                    vaulted_relpaths.append(rel)
-                    size_mb = f"{(size or 0) / (1024 * 1024):.2f}"
-                    csv_entries.append([
-                        "COPIED",
-                        src_path.name,
-                        str(src_path),
+                vaulted_relpaths.append(rel)
+                
+                size_mb = f"{(size or 0) / (1024 * 1024):.2f}"
+                csv_entries.append([
+                    "COPIED",
+                    src_path.name,
+                    str(src_path),
                     final_dest_path,
-                        final_dest_path,
-                        time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime_val)),
-                        size_mb,
-                        transaction_id,
-                        self.current_session_id,
-                    ])
-                    copied_count += 1
-                    copied_size += (size or 0)
-                    if copied_count % 500 == 0:
-                        self.log(f"Vault copy: {copied_count} file(s) copied…")
-                    self.progress(i + 1, len(golden_records), f"Copying {src_path.name}")
-                except Exception as exc:
-                    self.log(f"Vault copy error on {src_path.name}: {exc}")
+                    time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime_val)),
+                    size_mb,
+                    transaction_id,
+                    self.current_session_id,
+                ])
+                copied_count += 1
+                copied_size += (size or 0)
+                
+                if copied_count % 500 == 0:
+                    self.log(f"Vault copy: {copied_count} file(s) copied…")
+                self.progress(i + 1, len(golden_records), f"Copying {src_path.name}")
+            
+            except Exception as e:
+                self.log(f"Failed to copy {src_path.name}: {e}")
+                continue
 
             if csv_entries:
                 self._write_archive_manifest(report_path, csv_entries)
@@ -3509,7 +3512,7 @@ class DedupApp:
                             dest_file = orig_path.parent / f"{orig_path.stem}_v{counter}{orig_path.suffix}"
                             counter += 1
                         
-                        shutil.move(str(curr_path), str(dest_file))
+                        shutil.copy2(str(curr_path), str(dest_file))
                         with self.db_manager.conn:
                             self.db_manager.conn.execute("UPDATE file_index SET full_path = ?, status = 'active', pre_archive_path = NULL, archive_transaction_id = NULL WHERE rowid = ?", (str(dest_file), rowid))
                         reverted_count += 1
