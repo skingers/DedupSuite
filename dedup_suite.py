@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+from datetime import datetime
 import re
 import os
 import sys
@@ -31,6 +32,7 @@ from core.markdown_translator import MarkdownTranslator, UniqueFileRecord, _sani
 from network.notary_bridge import CloudNotaryBridge
 import ingest_kernel
 from vector_engine import SovereignVectorEngine
+from chat_engine import generate_rag_response
 from pipeline import run_pipeline
 from config_manager import AppConfig
 
@@ -1718,6 +1720,14 @@ class Tooltip:
 
 class DedupApp:
     def __init__(self):
+        class LoggerWrapper:
+            def __init__(self, log_func):
+                self.log_func = log_func
+            def info(self, msg):
+                self.log_func(msg)
+        self.log_func = lambda msg: self.log(msg)
+        self.logger = LoggerWrapper(self.log_func)
+
         self.root = ctk.CTk()
         self.root.title("DedupSuite — Deduplication & Cryptographic Notary")
         self.root.minsize(1100, 700)
@@ -1753,6 +1763,7 @@ class DedupApp:
 
         self.t_vault = self.nb.add("Vault Elevation")
         self.t_pro = self.nb.add("Pro Studio")
+        self.t_chat = self.nb.add("Vault Chat")
 
         f_log = ctk.CTkFrame(self.root, fg_color="transparent")
         f_log.grid(row=1, column=0, sticky="ew", padx=20, pady=(10, 5))
@@ -1775,12 +1786,17 @@ class DedupApp:
         )
         _vault_init = self._initial_vault_path()
         self.target_vault_dir = tk.StringVar(value=_vault_init)
+        try:
+            self.vector_engine = SovereignVectorEngine(_vault_init)
+        except Exception as exc:
+            self.vector_engine = None
         self.mode_var = tk.StringVar(value="Exact")
         self.review_var = tk.BooleanVar(value=bool(config.get("review_duplicates", True)))
         self.notarise_var = tk.BooleanVar(value=bool(config.get("notarise", True)))
 
         self._init_vault_elevation_tab()
         self._init_pro_studio_tab()
+        self._init_vault_chat_tab()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         # Thread-safe log buffer drained onto the widget every 100ms on the
@@ -2066,7 +2082,7 @@ class DedupApp:
         location. Writing is skipped if the dialog is cancelled, and any I/O
         error is surfaced via a message box.
         """
-        default_name = f"{time.strftime('%Y-%m-%d')}_DedupSuite_Log.txt"
+        default_name = f"{time.strftime('%Y-%m-%d_%H%M%S')}_DedupSuite_Log.txt"
         # Default to a "logs" folder next to the app/executable for predictable,
         # path-relative archival (created lazily only if the user saves there).
         initial_dir = os.path.join(self._runtime_base(), "logs")
@@ -2392,16 +2408,17 @@ class DedupApp:
         def ingestion_task():
             try:
                 engine = SovereignVectorEngine(vault_path)
+                self.vector_engine = engine
                 def safe_update(msg):
                     self.chat_display.configure(state="normal")
                     self.chat_display.insert("end", msg + "\n")
                     self.chat_display.see("end")
                     self.chat_display.configure(state="disabled")
                 
-                engine.sync_index(progress_callback=lambda msg: self.after(0, safe_update, msg))
-                self.after(0, safe_update, "[SUCCESS] Vault successfully indexed!")
+                engine.sync_index(progress_callback=lambda msg: self.root.after(0, safe_update, msg))
+                self.root.after(0, safe_update, "[SUCCESS] Vault successfully indexed!")
             except Exception as e:
-                self.after(0, safe_update, f"[ERROR] Indexing failed: {str(e)}\n")
+                self.root.after(0, safe_update, f"[ERROR] Indexing failed: {str(e)}\n")
 
         threading.Thread(target=ingestion_task, daemon=True).start()
 
@@ -2413,6 +2430,7 @@ class DedupApp:
 
         try:
             indexer = SovereignVectorEngine(directory_path)
+            self.vector_engine = indexer
         except Exception as exc:
             self.log(f"[AI Indexer] Error initializing indexer: {exc}")
             messagebox.showerror("AI Indexer Error", f"Failed to initialize SovereignVectorEngine:\n{exc}")
@@ -2555,13 +2573,15 @@ class DedupApp:
         self,
         src_path: Path,
         vault_source_root: Path,
-        reserved: set,
-        collision_policy: str,
+        reserved: Optional[set] = None,
+        collision_policy: str = "skip",
     ) -> Optional[Path]:
+        if reserved is None:
+            reserved = set()
         year_dir = vault_source_root / _obsidian_year_bucket(
             UniqueFileRecord(path=src_path, file_hash=""),
         )
-        return self._resolve_vault_dest(src_path, year_dir, reserved, collision_policy)
+        return self._resolve_vault_dest(src_path, year_dir, reserved, collision_policy, vault_source_root)
 
     def _resolve_vault_dest(
         self,
@@ -2569,8 +2589,11 @@ class DedupApp:
         dest_dir: Path,
         reserved: set,
         collision_policy: str,
+        vault_source_root: Optional[Path] = None,
     ) -> Optional[Path]:
-        dest_file = dest_dir / src_path.name
+        filename = os.path.basename(str(src_path))
+        clean_name = self.sanitize_filename(filename)
+        dest_file = dest_dir / clean_name
         policy = (collision_policy or "skip").lower()
         if policy == "skip":
             if dest_file.exists() or str(dest_file) in reserved:
@@ -2579,9 +2602,14 @@ class DedupApp:
         if policy == "overwrite":
             return dest_file
         counter = 2
-        isolation_path = os.path.join(vault_source_root, "Isolated_Legacy_Copies", os.path.basename(str(src_path)))
+        if vault_source_root is None:
+            isolation_path = dest_dir
+        else:
+            isolation_path = Path(os.path.join(vault_source_root, "Isolated_Legacy_Copies", clean_name))
+        
+        name_stem, name_ext = os.path.splitext(clean_name)
         while dest_file.exists() or str(dest_file) in reserved:
-            dest_file = isolation_path / f"{src_path.stem}_v{counter}{src_path.suffix}"
+            dest_file = isolation_path / f"{name_stem}_v{counter}{name_ext}"
             counter += 1
         return dest_file
 
@@ -2691,6 +2719,7 @@ class DedupApp:
             self._ensure_file_index_status_column()
             source_label = _obsidian_source_folder_label(source_path)
             vault_source_root = Path(vault_path).resolve() / source_label
+            target_vault_dir = vault_source_root
             records = self._fetch_session_legacy_records(self.current_session_id)
             session_timestamp = time.strftime("%Y%m%d_%H%M%S")
             transaction_id = session_timestamp
@@ -2779,83 +2808,116 @@ class DedupApp:
             aborted = False
             vaulted_relpaths: List[str] = []
 
+            self.log(f"[PIPELINE] Starting with {len(golden_records)} golden records.")
+
             for i, (rowid, fp_str, size, mtime) in enumerate(golden_records):
                 if self.stop_event.is_set():
                     aborted = True
                     self.log("Aborted by User.")
                     break
+
                 src_path = Path(fp_str)
+
                 if not src_path.is_file():
+                    self.log(f"[SKIP-NOFILE] {fp_str}")
                     continue
-                
-                original_name = src_path.name
-                clean_file = self.sanitize_filename(original_name)
-                sanitized_src_path = src_path.with_name(clean_file)
-                dest_file = self._resolve_vault_asset_dest(
-                    sanitized_src_path, vault_source_root, reserved_exec, collision_policy,
-                )
-                if dest_file is None:
-                    csv_entries.append([
-                        "SKIPPED",
-                        src_path.name,
-                        str(src_path),
-                        "",
-                        "",
-                        f"{(size or 0) / (1024 * 1024):.2f}",
-                        transaction_id,
-                        self.current_session_id,
-                    ])
-                    continue
-                reserved_exec.add(str(dest_file))
-                if self.stop_event.is_set():
-                    aborted = True
-                    self.log("Aborted by User.")
-                    break
 
                 try:
-                    dest_file.parent.mkdir(parents=True, exist_ok=True)
-                    mtime_val = mtime if mtime else os.path.getmtime(src_path)
-                    
-                    final_dest_path = str(dest_file)
-                    shutil.copy2(str(src_path), final_dest_path)
-                    
-                    # Generate the Sidecar
-                    dest_path_obj = Path(final_dest_path)
-                    sidecar_path = dest_path_obj.with_suffix(".md")
+                    # --- LOCK: Derive and freeze target_path. Nothing below may alter it. ---
+                    raw_name      = src_path.name
+                    clean_base    = self.sanitize_filename(raw_name)
+                    file_mtime    = mtime if mtime else os.path.getmtime(src_path)
+                    date_prefix   = datetime.fromtimestamp(file_mtime).strftime('%Y-%m-%d')
+                    year_folder   = datetime.fromtimestamp(file_mtime).strftime('%Y')
+                    final_name    = f"{date_prefix}_{clean_base}"
+
+                    # Insert the [YYYY] subdirectory as per your architecture requirement
+                    year_dir      = Path(target_vault_dir) / year_folder
+                    target_path   = str((year_dir / final_name).resolve())
+                    # target_path is now a plain immutable str. Do not reassign it.
+
+                    self.log(
+                        f"[PIPELINE] [{i+1}/{len(golden_records)}] "
+                        f"src={raw_name} -> target={target_path}"
+                    )
+
+                    # --- CHECK: Filesystem existence only. DB state is irrelevant here. ---
+                    if os.path.exists(target_path):
+                        self.log(f"[SKIP-EXISTS] {target_path}")
+                        csv_entries.append([
+                            "SKIPPED",
+                            raw_name,
+                            str(src_path),
+                            target_path,
+                            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(file_mtime)),
+                            f"{(size or 0) / (1024*1024):.2f}",
+                            transaction_id,
+                            self.current_session_id,
+                        ])
+                        continue
+
+                    # --- EXECUTE: makedirs on the resolved parent, then atomic copy. ---
+                    target_parent = os.path.dirname(target_path)
+                    if not target_parent:
+                        raise ValueError(
+                            f"target_path has no parent directory: {target_path!r}. "
+                            f"Check target_vault_dir={target_vault_dir!r}"
+                        )
+                    os.makedirs(target_parent, exist_ok=True)
+                    shutil.copy2(str(src_path), target_path)
+
+                    # --- VERIFY: Confirm the file actually landed before recording. ---
+                    if not os.path.exists(target_path):
+                        raise RuntimeError(
+                            f"shutil.copy2 completed without error but {target_path} "
+                            f"does not exist. Possible permissions or path issue."
+                        )
+
+                    # Sidecar markdown
+                    dest_path_obj  = Path(target_path)
+                    sidecar_path   = dest_path_obj.with_suffix(".md")
                     sidecar_content = (
                         "---\n"
-                        f"original_filename: {src_path.name}\n"
+                        f"original_filename: {raw_name}\n"
                         f"vaulted_name: {dest_path_obj.name}\n"
                         "---\n"
-                        f"# {src_path.name}\n\n"
+                        f"# {raw_name}\n\n"
                         "Vaulted binary asset.\n"
                     )
                     sidecar_path.write_text(sidecar_content, encoding="utf-8")
-                    
-                    rel = Path(final_dest_path).relative_to(vault_source_root).as_posix()
+
+                    # Manifest
+                    rel = Path(target_path).relative_to(vault_source_root).as_posix()
                     vaulted_relpaths.append(rel)
-                    
-                    size_mb = f"{(size or 0) / (1024 * 1024):.2f}"
+
+                    size_mb = f"{(size or 0) / (1024*1024):.2f}"
                     csv_entries.append([
                         "COPIED",
-                        src_path.name,
+                        raw_name,
                         str(src_path),
-                        final_dest_path,
-                        time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime_val)),
+                        target_path,
+                        time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(file_mtime)),
                         size_mb,
                         transaction_id,
                         self.current_session_id,
                     ])
                     copied_count += 1
-                    copied_size += (size or 0)
-                    
+                    copied_size  += (size or 0)
+
                     if copied_count % 500 == 0:
                         self.log(f"Vault copy: {copied_count} file(s) copied…")
-                    self.progress(i + 1, len(golden_records), f"Copying {src_path.name}")
-                
+
+                    self.progress(i + 1, len(golden_records), f"Copying {raw_name}")
+
                 except Exception as e:
-                    self.log(f"Failed to copy {src_path.name}: {e}")
+                    self.log(f"[ERROR] Failed to copy {fp_str}: {type(e).__name__}: {e}")
                     continue
+
+            self.log(
+                f"[PIPELINE] Complete. copied={copied_count}, "
+                f"skipped={sum(1 for e in csv_entries if e[0]=='SKIPPED')}, "
+                f"total_records={len(golden_records)}"
+            )
 
             if csv_entries:
                 self._write_archive_manifest(report_path, csv_entries)
@@ -3225,6 +3287,131 @@ class DedupApp:
 
         self.update_datamine_stats()
 
+    def _init_vault_chat_tab(self) -> None:
+        """Sovereign RAG Tab: interact with vault documents via local LLM."""
+        master_frame = ctk.CTkFrame(self.t_chat, fg_color="transparent")
+        master_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # 1. Top Control Frame: Boot and Kill AI Engine
+        control_frame = ctk.CTkFrame(master_frame, fg_color="transparent")
+        control_frame.pack(side="top", fill="x", pady=(0, 10))
+
+        btn_boot = ctk.CTkButton(
+            control_frame,
+            text="Boot AI Engine",
+            image=self.icons.get("play"),
+            compound="left",
+            fg_color=COLOR_SAFE,
+            hover_color=COLOR_SAFE_HOVER,
+            command=self._boot_ai_engine,
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            height=36,
+        )
+        btn_boot.pack(side="left", padx=(0, 10))
+
+        btn_kill = ctk.CTkButton(
+            control_frame,
+            text="Kill AI Engine",
+            image=self.icons.get("stop"),
+            compound="left",
+            fg_color=COLOR_DANGER,
+            hover_color=COLOR_DANGER_HOVER,
+            command=self._kill_ai_engine,
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            height=36,
+        )
+        btn_kill.pack(side="left")
+
+        # 2. Large Disabled CTkTextbox for Chat Display
+        self.chat_display = ctk.CTkTextbox(
+            master_frame,
+            font=ctk.CTkFont(family="Segoe UI", size=13),
+            fg_color="#0D0D11",
+            text_color="#FFFFFF",
+            border_color=COLOR_NEUTRAL,
+            border_width=1,
+        )
+        self.chat_display.pack(side="top", fill="both", expand=True, pady=(0, 10))
+        self.chat_display.configure(state="disabled")
+
+        # 3. Bottom Frame: Entry Input and Send Button
+        input_frame = ctk.CTkFrame(master_frame, fg_color="transparent")
+        input_frame.pack(side="bottom", fill="x")
+
+        self.chat_input = ctk.CTkEntry(
+            input_frame,
+            placeholder_text="Ask your vault a question...",
+            font=FONT_BODY,
+            height=40,
+        )
+        self.chat_input.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.chat_input.bind("<Return>", lambda e: self._send_message())
+
+        btn_send = ctk.CTkButton(
+            input_frame,
+            text="Send",
+            image=self.icons.get("arrow"),
+            compound="left",
+            fg_color=COLOR_INFO,
+            hover_color=COLOR_INFO_HOVER,
+            text_color=COLOR_ON_INFO,
+            command=self._send_message,
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            width=100,
+            height=40,
+        )
+        btn_send.pack(side="right")
+
+    def _boot_ai_engine(self) -> None:
+        self._append_chat_text("\n[SYSTEM: Booting AI Engine...]\n")
+        try:
+            subprocess.Popen(["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", "start_ollama_agent.ps1"])
+            self._append_chat_text("[SYSTEM: Ollama engine start command dispatched.]\n")
+        except Exception as e:
+            self._append_chat_text(f"[SYSTEM ERROR: Failed to boot AI engine: {e}]\n")
+
+    def _kill_ai_engine(self) -> None:
+        self._append_chat_text("\n[SYSTEM: Stopping AI Engine...]\n")
+        try:
+            subprocess.Popen(["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", "stop_ollama_agent.ps1"])
+            self._append_chat_text("[SYSTEM: Ollama engine stop command dispatched.]\n")
+        except Exception as e:
+            self._append_chat_text(f"[SYSTEM ERROR: Failed to stop AI engine: {e}]\n")
+
+    def _append_chat_text(self, text: str) -> None:
+        self.chat_display.configure(state="normal")
+        self.chat_display.insert("end", text)
+        self.chat_display.see("end")
+        self.chat_display.configure(state="disabled")
+
+    def _send_message(self) -> None:
+        query = self.chat_input.get().strip()
+        if not query:
+            return
+
+        self._append_chat_text(f"\nUser: {query}\n\nAI: ")
+        self.chat_input.delete(0, "end")
+
+        if not self.vector_engine:
+            directory_path = self.target_vault_dir.get()
+            if not directory_path:
+                directory_path = self._initial_vault_path()
+            try:
+                self.vector_engine = SovereignVectorEngine(directory_path)
+            except Exception as e:
+                self._append_chat_text(f"[Vector Retrieval Error: Vector engine not initialized. Please set a valid Vault Destination. Error: {str(e)}]\n")
+                return
+
+        def run_query():
+            try:
+                for chunk in generate_rag_response(query, self.vector_engine):
+                    self.root.after(0, self._append_chat_text, chunk)
+                self.root.after(0, self._append_chat_text, "\n")
+            except Exception as e:
+                self.root.after(0, self._append_chat_text, f"\n[RAG Error: {str(e)}]\n")
+
+        threading.Thread(target=run_query, daemon=True).start()
+
     def rationalize_mine(self) -> None:
         """Recompute golden/legacy classification without blocking the UI.
 
@@ -3421,10 +3608,12 @@ class DedupApp:
                     if not src_path.exists(): continue
                     try:
                         mtime_val = mtime if mtime else os.path.getmtime(src_path)
-                        dest_file = isolation_path / src_path.name
+                        clean_file = self.sanitize_filename(src_path.name)
+                        dest_file = isolation_path / clean_file
                         counter = 2
                         while dest_file.exists() or str(dest_file) in simulated_moves:
-                            dest_file = isolation_path / f"{src_path.stem}_v{counter}{src_path.suffix}"
+                            name_stem, name_ext = os.path.splitext(clean_file)
+                            dest_file = isolation_path / f"{name_stem}_v{counter}{name_ext}"
                             counter += 1
                             
                         status_str = "SIMULATED" if is_dry_run else "COPIED"
