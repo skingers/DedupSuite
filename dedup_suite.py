@@ -1252,6 +1252,7 @@ class ReviewDialog:
     def __init__(self, parent, duplicate_groups, total_groups=0, db_manager=None, scan_mode="Exact", move_to_path=None, precomputed_hashes=None, threshold=5):
         self.top = ctk.CTkToplevel(parent)
         self.top.title("Review Duplicates")
+        self.top.configure(fg_color="#181818")
         self._center_window(1100, 650)
 
         # Ensure the dialog opens on top and is modal
@@ -1321,7 +1322,7 @@ class ReviewDialog:
 
     def _init_ui(self):
         # Top Filter & Status
-        f_top = ctk.CTkFrame(self.top)
+        f_top = ctk.CTkFrame(self.top, fg_color="#2A2A2A")
         f_top.pack(fill="x", padx=20, pady=(20, 10))
         
         ctk.CTkLabel(f_top, text="Filter by Type:").pack(side="left", padx=10, pady=10)
@@ -1331,10 +1332,10 @@ class ReviewDialog:
         self.cb_filter.pack(side="left", padx=5, pady=10)
         
         ctk.CTkButton(f_top, text="Clear", image=self.icons['close'], compound="left", fg_color="gray", command=self.clear_filter, width=80).pack(side="left", padx=5, pady=10)
-        ctk.CTkButton(f_top, text="Delete All Shown", image=self.icons['trash'], compound="left", fg_color="#C92C2C", hover_color="#992222", command=self.delete_all_shown).pack(side="left", padx=5, pady=10)
-        ctk.CTkButton(f_top, text="Copy All Shown", image=self.icons['arrow'], compound="left", command=self.move_all_shown).pack(side="left", padx=5, pady=10)
+        ctk.CTkButton(f_top, text="Delete All Shown", image=self.icons['trash'], compound="left", fg_color=COLOR_DANGER, hover_color=COLOR_DANGER_HOVER, command=self.delete_all_shown).pack(side="left", padx=5, pady=10)
+        ctk.CTkButton(f_top, text="Copy All Shown", image=self.icons['arrow'], compound="left", fg_color=COLOR_NEUTRAL, hover_color=COLOR_NEUTRAL_HOVER, command=self.move_all_shown).pack(side="left", padx=5, pady=10)
         
-        self.lbl_stats = ctk.CTkLabel(f_top, text=f"Total Duplicates: {len(self.pairs)}")
+        self.lbl_stats = ctk.CTkLabel(f_top, text=f"Total Duplicates: {len(self.pairs)}", text_color="#9E9E9E")
         self.lbl_stats.pack(side="right", padx=20, pady=10)
         
         # Images
@@ -1344,21 +1345,21 @@ class ReviewDialog:
         self.f_img = ctk.CTkFrame(self.f_content, fg_color="transparent")
         
         # Left (Original)
-        f_left = ctk.CTkFrame(self.f_img)
+        f_left = ctk.CTkFrame(self.f_img, fg_color="#2A2A2A")
         f_left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         ctk.CTkLabel(f_left, text="Original (Keep)", font=("Segoe UI", 14, "bold")).pack(pady=5)
         self.lbl_orig = ctk.CTkLabel(f_left, text="Loading Preview...")
         self.lbl_orig.pack(expand=True, pady=10)
-        self.lbl_orig_path = ctk.CTkLabel(f_left, text="", wraplength=450, justify="center", font=("Segoe UI", 11))
+        self.lbl_orig_path = ctk.CTkLabel(f_left, text="", wraplength=450, justify="center", font=("Consolas", 12), text_color="#9E9E9E")
         self.lbl_orig_path.pack(fill="x", pady=10, padx=10)
 
         # Right (Duplicate)
-        f_right = ctk.CTkFrame(self.f_img)
+        f_right = ctk.CTkFrame(self.f_img, fg_color="#2A2A2A")
         f_right.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
-        ctk.CTkLabel(f_right, text="Duplicate (Delete)", font=("Segoe UI", 14, "bold"), text_color="#ff6666").pack(pady=5)
+        ctk.CTkLabel(f_right, text="Duplicate (Delete)", font=("Segoe UI", 14, "bold"), text_color="#A34B4B").pack(pady=5)
         self.lbl_dupe = ctk.CTkLabel(f_right, text="Loading Preview...")
         self.lbl_dupe.pack(expand=True, pady=10)
-        self.lbl_dupe_path = ctk.CTkLabel(f_right, text="", wraplength=450, justify="center", font=("Segoe UI", 11))
+        self.lbl_dupe_path = ctk.CTkLabel(f_right, text="", wraplength=450, justify="center", font=("Consolas", 12), text_color="#9E9E9E")
         self.lbl_dupe_path.pack(fill="x", pady=10, padx=10)
         
         self.f_img.columnconfigure(0, weight=1); self.f_img.columnconfigure(1, weight=1)
@@ -1379,10 +1380,10 @@ class ReviewDialog:
         # Left controls
         f_c_left = ctk.CTkFrame(f_ctrl, fg_color="transparent")
         f_c_left.pack(side="left")
-        ctk.CTkButton(f_c_left, text="Smart Select", image=self.icons['check'], compound="left", command=self.smart_select, width=120).pack(side="left", padx=5, pady=10, anchor="center")
-        ctk.CTkButton(f_c_left, text="Find Similar", image=self.icons['search'], compound="left", command=self.find_similar, width=120).pack(side="left", padx=5, pady=10, anchor="center")
-        if HAS_REPORTLAB: ctk.CTkButton(f_c_left, text="PDF", image=self.icons['save'], compound="left", command=self.export_pdf, width=80).pack(side="left", padx=5, pady=10, anchor="center")
-        ctk.CTkButton(f_c_left, text="CSV", image=self.icons['save'], compound="left", command=self.export_csv, width=80).pack(side="left", padx=5, pady=10, anchor="center")
+        ctk.CTkButton(f_c_left, text="Smart Select", image=self.icons['check'], compound="left", fg_color=COLOR_NEUTRAL, hover_color=COLOR_NEUTRAL_HOVER, command=self.smart_select, width=120).pack(side="left", padx=5, pady=10, anchor="center")
+        ctk.CTkButton(f_c_left, text="Find Similar", image=self.icons['search'], compound="left", fg_color=COLOR_NEUTRAL, hover_color=COLOR_NEUTRAL_HOVER, command=self.find_similar, width=120).pack(side="left", padx=5, pady=10, anchor="center")
+        if HAS_REPORTLAB: ctk.CTkButton(f_c_left, text="PDF", image=self.icons['save'], compound="left", fg_color=COLOR_NEUTRAL, hover_color=COLOR_NEUTRAL_HOVER, command=self.export_pdf, width=80).pack(side="left", padx=5, pady=10, anchor="center")
+        ctk.CTkButton(f_c_left, text="CSV", image=self.icons['save'], compound="left", fg_color=COLOR_NEUTRAL, hover_color=COLOR_NEUTRAL_HOVER, command=self.export_csv, width=80).pack(side="left", padx=5, pady=10, anchor="center")
         
         # Center controls (Move)
         f_c_center = ctk.CTkFrame(f_ctrl, fg_color="transparent")
@@ -1390,7 +1391,7 @@ class ReviewDialog:
         
         target_frame = ctk.CTkFrame(f_c_center, fg_color="transparent")
         target_frame.pack(side="left", padx=10, pady=0, anchor="center")
-        ctk.CTkLabel(target_frame, text="Copy destination (Vault folder)", font=("Segoe UI", 10)).grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(target_frame, text="Copy destination (Vault folder)", font=("Segoe UI", 12)).grid(row=0, column=0, sticky="w")
         self.cb_targets = ctk.CTkComboBox(target_frame, variable=self.target_var, values=self.move_targets, width=150, state="readonly")
         self.cb_targets.grid(row=1, column=0, sticky="ew")
         
@@ -1400,17 +1401,17 @@ class ReviewDialog:
                 self.target_var.set(d)
                 self._save_target()
             
-        ctk.CTkButton(f_c_center, text="Browse", image=self.icons['folder'], compound="left", command=browse_target, width=80).pack(side="left", padx=5, pady=10, anchor="center")
-        ctk.CTkButton(f_c_center, text="Copy", image=self.icons['arrow'], compound="left", command=self.move_dupe, width=80).pack(side="left", pady=10, anchor="center")
+        ctk.CTkButton(f_c_center, text="Browse", image=self.icons['folder'], compound="left", fg_color=COLOR_NEUTRAL, hover_color=COLOR_NEUTRAL_HOVER, command=browse_target, width=80).pack(side="left", padx=5, pady=10, anchor="center")
+        ctk.CTkButton(f_c_center, text="Copy", image=self.icons['arrow'], compound="left", fg_color=COLOR_NEUTRAL, hover_color=COLOR_NEUTRAL_HOVER, command=self.move_dupe, width=80).pack(side="left", pady=10, anchor="center")
         
         # Right controls
         f_c_right = ctk.CTkFrame(f_ctrl, fg_color="transparent")
         f_c_right.pack(side="right")
         ctk.CTkButton(f_c_right, text="Undo", image=self.icons['refresh'], compound="left", fg_color="gray", command=self.undo_last, width=80).pack(side="right", padx=5, pady=10, anchor="center")
-        ctk.CTkButton(f_c_right, text="Skip >", image=self.icons['arrow'], compound="right", command=self.next_pair, width=80).pack(side="right", padx=5, pady=10, anchor="center")
-        ctk.CTkButton(f_c_right, text="DELETE", image=self.icons['trash'], compound="left", fg_color="#C92C2C", hover_color="#992222", command=self.delete_dupe, width=100).pack(side="right", padx=10, pady=10, anchor="center")
+        ctk.CTkButton(f_c_right, text="Skip >", image=self.icons['arrow'], compound="right", fg_color=COLOR_NEUTRAL, hover_color=COLOR_NEUTRAL_HOVER, command=self.next_pair, width=80).pack(side="right", padx=5, pady=10, anchor="center")
+        ctk.CTkButton(f_c_right, text="DELETE", image=self.icons['trash'], compound="left", fg_color=COLOR_DANGER, hover_color=COLOR_DANGER_HOVER, command=self.delete_dupe, width=100).pack(side="right", padx=10, pady=10, anchor="center")
         
-        self.lbl_prog = ctk.CTkLabel(f_ctrl, text="0/0", font=("Segoe UI", 12, "bold"))
+        self.lbl_prog = ctk.CTkLabel(f_ctrl, text="0/0", font=("Segoe UI", 12, "bold"), text_color="#9E9E9E")
         self.lbl_prog.pack(side="right", padx=20)
         
         # Shortcuts
@@ -1661,10 +1662,10 @@ class ReviewDialog:
             lbl_title = ctk.CTkLabel(f_row, text="", font=("Segoe UI", 14, "bold"))
             lbl_title.grid(row=0, column=0, sticky="w", padx=10, pady=(10,0))
             
-            lbl_details = ctk.CTkLabel(f_row, text="", justify="left")
+            lbl_details = ctk.CTkLabel(f_row, text="", justify="left", font=("Consolas", 12), text_color="#9E9E9E")
             lbl_details.grid(row=1, column=0, sticky="w", padx=10, pady=(5,10))
             
-            btn_open = ctk.CTkButton(f_row, text="Open File Location", width=130)
+            btn_open = ctk.CTkButton(f_row, text="Open File Location", fg_color=COLOR_NEUTRAL, hover_color=COLOR_NEUTRAL_HOVER, width=130)
             btn_open.grid(row=0, column=1, rowspan=2, sticky="e", padx=20, pady=10)
             
             self._metadata_rows.append((f_row, lbl_title, lbl_details, btn_open))
@@ -1683,7 +1684,7 @@ class ReviewDialog:
                 mtime = "Unknown"
                 size = "Unknown"
                 
-            color = "#2CC985" if is_golden else "#ff6666"
+            color = COLOR_INFO if is_golden else "#A34B4B"
             lbl_title.configure(text=title, text_color=color)
             lbl_details.configure(text=f"Path: {path}\nSize: {size}  |  Modified: {mtime}")
             btn_open.configure(command=lambda p=path: self._ctx_action_path(p, 'folder'))
@@ -1804,7 +1805,7 @@ class ReviewDialog:
         f.pack(fill="both", expand=True, padx=20, pady=20)
         ctk.CTkLabel(f, text=f"Found {len(similar_files)} similar files:").pack(anchor="w", pady=(0, 10))
         
-        txt = ctk.CTkTextbox(f)
+        txt = ctk.CTkTextbox(f, font=("Consolas", 12))
         txt.pack(fill="both", expand=True, pady=5)
         for path, distance in similar_files: 
             txt.insert("end", f"Distance: {distance}\t| Path: {path}\n")
@@ -1864,7 +1865,7 @@ class ReviewDialog:
 
             for i, (key, value) in enumerate(details.items()):
                 ctk.CTkLabel(f, text=key, font=("Segoe UI", 12, "bold")).grid(row=i, column=0, sticky="nw", padx=10, pady=5)
-                entry = ctk.CTkEntry(f, width=300)
+                entry = ctk.CTkEntry(f, width=300, font=("Consolas", 12))
                 entry.insert(0, value)
                 entry.configure(state="readonly")
                 entry.grid(row=i, column=1, sticky="ew", padx=10, pady=5)
@@ -1914,29 +1915,29 @@ class ReviewDialog:
 # Semantic colour palette: safe (green), caution (amber), destructive (red),
 # informational/utility (teal/grey), used consistently so users can read an
 # action's intent from its colour at a glance.
-COLOR_SAFE = "#2CC985"
-COLOR_SAFE_HOVER = "#229966"
-COLOR_CAUTION = "#E5A00D"
-COLOR_CAUTION_HOVER = "#B37D0A"
-COLOR_DANGER = "#C92C2C"
-COLOR_DANGER_HOVER = "#992222"
+COLOR_SAFE = "#1d6a73"
+COLOR_SAFE_HOVER = "#154d54"
+COLOR_CAUTION = "#4A4D50"
+COLOR_CAUTION_HOVER = "#393C3E"
+COLOR_DANGER = "#4A2222"
+COLOR_DANGER_HOVER = "#3A1A1A"
 # Brand cyan sampled from the DedupSuite 2.0 logo (#66FCF1). Because the fill is
 # bright, on-cyan text/icons use a near-black foreground for accessible contrast.
-COLOR_INFO = "#66FCF1"
-COLOR_INFO_HOVER = "#45CFC4"
-COLOR_ON_INFO = "#0A0A0D"
+COLOR_INFO = "#1d6a73"
+COLOR_INFO_HOVER = "#154d54"
+COLOR_ON_INFO = "#EAEAEA"
 COLOR_NEUTRAL = "#4A4D50"
 COLOR_NEUTRAL_HOVER = "#393C3E"
-COLOR_HINT = "#9A9A9A"
+COLOR_HINT = "#9E9E9E"
 BRAND_BLACK = "#0B0B0D"
 
 FONT_TITLE = ("Segoe UI", 20, "bold")
 FONT_HEADER = ("Segoe UI", 15, "bold")
 FONT_BODY = ("Segoe UI", 12)
-FONT_HINT = ("Segoe UI", 11)
+FONT_HINT = ("Segoe UI", 12)
 FONT_CALM_STEP = ("Segoe UI", 14, "bold")
 FONT_CALM_BODY = ("Segoe UI", 12)
-FONT_CALM_SMALL = ("Segoe UI", 10)
+FONT_CALM_SMALL = ("Segoe UI", 12)
 JOURNEY_PADY = 0
 STEP3_RUN_GAP = 8
 
@@ -1998,8 +1999,8 @@ class Tooltip:
         except tk.TclError:
             pass
         tk.Label(
-            self._tip, text=self.text, justify="left", bg="#2B2B2B", fg="#E6E6E6",
-            relief="solid", borderwidth=1, font=("Segoe UI", 10), padx=8, pady=5,
+            self._tip, text=self.text, justify="left", bg="#1C1C1E", fg="#EAEAEA",
+            relief="solid", borderwidth=1, font=("Segoe UI", 12), padx=8, pady=5,
             wraplength=320,
         ).pack()
 
@@ -2029,6 +2030,7 @@ class DedupApp:
         self.logger = LoggerWrapper(self.log_func)
 
         self.root = ctk.CTk()
+        self.root.configure(fg_color="#181818")
         self.root.title("DedupSuite — Deduplication & Cryptographic Notary")
         self.root.minsize(1100, 700)
         self.root.after(100, lambda: self.root.state('zoomed'))
@@ -2058,7 +2060,13 @@ class DedupApp:
         self.root.grid_rowconfigure(3, weight=0)
         self.root.grid_columnconfigure(0, weight=1)
 
-        self.nb = ctk.CTkTabview(self.root)
+        self.nb = ctk.CTkTabview(
+            self.root,
+            segmented_button_selected_color=COLOR_INFO,
+            segmented_button_selected_hover_color=COLOR_INFO_HOVER,
+            segmented_button_unselected_color="#2A2A2A",
+            text_color="#EAEAEA",
+        )
         self.nb.grid(row=0, column=0, sticky="nsew", padx=8, pady=(8, 0))
 
         self.t_vault = self.nb.add("Vault Elevation")
@@ -2075,7 +2083,7 @@ class DedupApp:
         )
         self.btn_save_log.pack(side="right", padx=10)
 
-        self.log_area = ctk.CTkTextbox(self.root, height=120)
+        self.log_area = ctk.CTkTextbox(self.root, height=120, font=("Consolas", 12))
         self.log_area.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 10))
         self.pbar = ctk.CTkProgressBar(self.root)
         self.pbar.grid(row=3, column=0, sticky="ew", padx=20, pady=(0, 20))
@@ -2282,7 +2290,7 @@ class DedupApp:
         # Right-aligned background-task status indicator (click for an info
         # pop-up). Created first so the wordmark early-return cannot skip it.
         self.header_status = ctk.CTkLabel(
-            header, text="", font=("Segoe UI", 11), text_color=COLOR_INFO, cursor="hand2",
+            header, text="", font=("Segoe UI", 12), text_color=COLOR_INFO, cursor="hand2",
         )
         self.header_status.pack(side="right", padx=18)
         self.header_status.bind("<Button-1>", lambda _e: self._show_rationalise_info())
@@ -2333,8 +2341,8 @@ class DedupApp:
         ctk.CTkLabel(
             brand_col,
             text="YOUR DATA, YOUR FUTURE. LOCAL, VERIFIED AND IMMUTABLE.",
-            font=("Segoe UI", 11),
-            text_color="gray60",
+            font=("Segoe UI", 12),
+            text_color="#9E9E9E",
             anchor="w",
         ).pack(anchor="w", pady=(2, 0))
 
@@ -2446,8 +2454,8 @@ class DedupApp:
             frame = tk.Frame(win, bg="#1C1C1E", highlightbackground=accent, highlightthickness=1)
             frame.pack(fill="both", expand=True)
             tk.Label(
-                frame, text=message, bg="#1C1C1E", fg="#E6E6E6",
-                font=("Segoe UI", 10), padx=14, pady=8,
+                frame, text=message, bg="#1C1C1E", fg="#EAEAEA",
+                font=("Segoe UI", 12), padx=14, pady=8,
             ).pack()
             win.update_idletasks()
             rx, ry = self.root.winfo_rootx(), self.root.winfo_rooty()
@@ -2506,7 +2514,7 @@ class DedupApp:
         Returns:
             A transparent content frame inside the card for the caller's widgets.
         """
-        card = ctk.CTkFrame(parent)
+        card = ctk.CTkFrame(parent, fg_color="#2A2A2A")
         card.pack(fill="x", padx=20, pady=(3, 0) if tight else (15, 0))
         ctk.CTkLabel(card, text=title, font=FONT_HEADER, anchor="w").pack(
             fill="x", padx=15, pady=(4, 1) if tight else (12, 2)
@@ -2626,7 +2634,7 @@ class DedupApp:
         grid_row: int,
     ) -> ctk.CTkFrame:
         """Compact step card; minimal vertical gap between journey steps."""
-        card = ctk.CTkFrame(parent, corner_radius=8)
+        card = ctk.CTkFrame(parent, corner_radius=8, fg_color="#2A2A2A")
         card.grid(row=grid_row, column=0, sticky="ew", padx=4, pady=JOURNEY_PADY)
         head = ctk.CTkFrame(card, fg_color="transparent")
         head.pack(fill="x", padx=8, pady=(2, 0))
@@ -3277,8 +3285,9 @@ class DedupApp:
             text="Elevate & Vault",
             image=self.icons["play"],
             compound="left",
-            fg_color=COLOR_SAFE,
-            hover_color=COLOR_SAFE_HOVER,
+            fg_color=COLOR_INFO,
+            hover_color=COLOR_INFO_HOVER,
+            text_color=COLOR_ON_INFO,
             command=self.start_audit,
             width=200,
             height=40,
@@ -3322,7 +3331,7 @@ class DedupApp:
         self.drop_zone = ctk.CTkFrame(
             content_frame, height=54, corner_radius=14,
             border_width=2, border_color=COLOR_NEUTRAL,
-            fg_color=("gray90", "#1E1E22"),
+            fg_color="#2A2A2A",
         )
         self.drop_zone.pack(fill="x", pady=(0, 4))
         self.drop_zone.pack_propagate(False)
@@ -3344,7 +3353,7 @@ class DedupApp:
         ctk.CTkEntry(
             path_row, textvariable=self.src_var,
             placeholder_text="Source folder path…",
-            height=32, font=FONT_CALM_BODY,
+            height=32, font=("Consolas", 12),
         ).pack(side="left", fill="x", expand=True, padx=(0, 8))
         ctk.CTkButton(
             path_row, text="Browse", image=self.icons["folder"], compound="left",
@@ -3354,14 +3363,15 @@ class DedupApp:
         ctk.CTkLabel(
             content_frame, text="Vault Destination", font=FONT_CALM_STEP, anchor="w",
         ).pack(fill="x", pady=(2, 2))
-        vault_card = ctk.CTkFrame(content_frame, corner_radius=10, fg_color=("gray92", "#1A1A1F"))
+        vault_card = ctk.CTkFrame(content_frame, corner_radius=10, fg_color="#2A2A2A")
         vault_card.pack(fill="x", pady=(0, 4))
         vault_inner = ctk.CTkFrame(vault_card, fg_color="transparent")
         vault_inner.pack(fill="x", padx=12, pady=4)
         self.lbl_vault_destination = ctk.CTkLabel(
             vault_inner,
             text=self._initial_vault_path(),
-            font=FONT_CALM_BODY,
+            font=("Consolas", 12),
+            text_color="#9E9E9E",
             anchor="w",
             justify="left",
             wraplength=760,
@@ -3407,21 +3417,34 @@ class DedupApp:
         config_frame = ctk.CTkFrame(master_frame, fg_color="transparent")
         config_frame.pack(side="top", fill="x", pady=(0, 10))
 
+        self._advanced_visible = False
+        self.btn_adv_toggle = ctk.CTkButton(
+            config_frame,
+            text="▶ Advanced Settings",
+            fg_color=COLOR_NEUTRAL,
+            hover_color=COLOR_NEUTRAL_HOVER,
+            command=self.toggle_advanced_settings,
+            width=180
+        )
+        self.btn_adv_toggle.pack(side="top", anchor="w", padx=5, pady=5)
+
+        self.advanced_settings_frame = ctk.CTkFrame(config_frame, fg_color="transparent")
+
         self.ai_model_var = tk.StringVar(value="CPU-Native Embedded")
         opt_model = ctk.CTkOptionMenu(
-            config_frame,
+            self.advanced_settings_frame,
             values=["CPU-Native Embedded", "Local LLM"],
             variable=self.ai_model_var,
             width=180
         )
         opt_model.pack(side="left", padx=5)
 
-        lbl_truth = ctk.CTkLabel(config_frame, text="Truthfulness:")
+        lbl_truth = ctk.CTkLabel(self.advanced_settings_frame, text="Truthfulness:")
         lbl_truth.pack(side="left", padx=5)
 
         self.ai_truthfulness_var = tk.DoubleVar(value=0.5)
         slider_truth = ctk.CTkSlider(
-            config_frame,
+            self.advanced_settings_frame,
             from_=0,
             to=1,
             variable=self.ai_truthfulness_var,
@@ -3430,10 +3453,13 @@ class DedupApp:
         slider_truth.pack(side="left", padx=5)
 
         btn_sync = ctk.CTkButton(
-            config_frame,
+            self.advanced_settings_frame,
             text="Sync AI Index",
             command=self._on_sync_ai_index,
-            width=120
+            width=120,
+            fg_color=COLOR_INFO,
+            hover_color=COLOR_INFO_HOVER,
+            text_color=COLOR_ON_INFO
         )
         btn_sync.pack(side="left", padx=5)
 
@@ -3441,6 +3467,16 @@ class DedupApp:
         self.chat_display = ctk.CTkTextbox(master_frame)
         self.chat_display.pack(side="top", fill="both", expand=True)
         self.chat_display.configure(state="disabled")
+
+    def toggle_advanced_settings(self) -> None:
+        if self._advanced_visible:
+            self.advanced_settings_frame.pack_forget()
+            self.btn_adv_toggle.configure(text="▶ Advanced Settings")
+            self._advanced_visible = False
+        else:
+            self.advanced_settings_frame.pack(side="top", fill="x", pady=5)
+            self.btn_adv_toggle.configure(text="▼ Advanced Settings")
+            self._advanced_visible = True
 
     def _init_merge_section(self, parent: Any) -> None:
         self.m_master = tk.StringVar(value=config.get("merge_master", ""))
@@ -3500,7 +3536,7 @@ class DedupApp:
         ).pack(anchor="w")
 
     def _init_datamine_section(self, parent: Any) -> None:
-        f_card = ctk.CTkFrame(parent, corner_radius=8)
+        f_card = ctk.CTkFrame(parent, corner_radius=8, fg_color="#2A2A2A")
         f_card.pack(fill="x", pady=(0, 10))
 
         ctk.CTkLabel(f_card, text="Vault Index Summary", font=FONT_TITLE).pack(
@@ -3509,11 +3545,11 @@ class DedupApp:
 
         stats = ctk.CTkFrame(f_card, fg_color="transparent")
         stats.pack(fill="x", padx=15, pady=(0, 10))
-        self.lbl_tot_files = ctk.CTkLabel(stats, text="Files Ingested: 0", font=FONT_BODY)
+        self.lbl_tot_files = ctk.CTkLabel(stats, text="Files Ingested: 0", font=FONT_BODY, text_color="#EAEAEA")
+        self.lbl_golden = ctk.CTkLabel(stats, text="Verified Golden Masters: 0", font=FONT_BODY, text_color=COLOR_INFO)
+        self.lbl_storage = ctk.CTkLabel(stats, text="Total Storage Used: 0 B", font=FONT_BODY, text_color="#9E9E9E")
         self.lbl_tot_files.pack(anchor="w", pady=2)
-        self.lbl_golden = ctk.CTkLabel(stats, text="Verified Golden Masters: 0", font=FONT_BODY)
         self.lbl_golden.pack(anchor="w", pady=2)
-        self.lbl_storage = ctk.CTkLabel(stats, text="Total Storage Used: 0 B", font=FONT_BODY)
         self.lbl_storage.pack(anchor="w", pady=2)
 
         self.btn_rationalize = ctk.CTkButton(
@@ -3556,18 +3592,18 @@ class DedupApp:
         )
         ctk.CTkButton(
             f_archive, text="Commit to Vault", font=FONT_HEADER,
-            fg_color=COLOR_CAUTION, hover_color=COLOR_CAUTION_HOVER, command=self.execute_bulk_archive,
-            height=42,
+            fg_color=COLOR_INFO, hover_color=COLOR_INFO_HOVER, text_color=COLOR_ON_INFO,
+            command=self.execute_bulk_archive, height=42,
         ).pack(anchor="w")
 
         ctk.CTkLabel(parent, text="Recent Golden Files", font=FONT_HEADER).pack(
             anchor="w", pady=(12, 4),
         )
-        self.txt_golden = ctk.CTkTextbox(parent, height=140)
+        self.txt_golden = ctk.CTkTextbox(parent, height=140, font=("Consolas", 12))
         self.txt_golden.pack(fill="x", pady=(0, 12))
         self.txt_golden.configure(state="disabled")
 
-        self.f_danger_zone = ctk.CTkFrame(parent, corner_radius=8)
+        self.f_danger_zone = ctk.CTkFrame(parent, corner_radius=8, fg_color="#2A2A2A")
         self.f_danger_zone.pack(fill="x", pady=(0, 8))
 
         ctk.CTkLabel(

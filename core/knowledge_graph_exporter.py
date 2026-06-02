@@ -244,7 +244,8 @@ class KnowledgeGraphExporter:
         for sc in sidecars:
             meta = sc["metadata"]
             body = sc["body"]
-            node_id = sc["rel_path"]
+            node_rel_path = sc["rel_path"]
+            node_id = hashlib.sha256(node_rel_path.encode("utf-8")).hexdigest()
             filepath = sc["filepath"]
 
             # Compute hash fallback by reading binary companion asset if not in frontmatter
@@ -344,7 +345,7 @@ class KnowledgeGraphExporter:
             node = {
                 "id": node_id,
                 "file_name": os.path.basename(sc["filepath"]),
-                "vault_relative_path": node_id,
+                "vault_relative_path": node_rel_path,
                 "original_path": orig_path,
                 "file_hash": file_hash,
                 "created": created_str,

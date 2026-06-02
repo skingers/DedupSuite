@@ -156,8 +156,13 @@ def test_scan_and_build_graph(tmp_path: Path) -> None:
     assert "edges" in graph
     assert len(graph["nodes"]) == 3
 
+    hash_note_1 = hashlib.sha256(b"2026/2026-06-01/2026-06-01-note1.md").hexdigest()
+    hash_note_2 = hashlib.sha256(b"2026/2026-06-01/2026-06-01-note2.md").hexdigest()
+    hash_note_3 = hashlib.sha256(b"2026/2026-06-02/2026-06-02-note3.md").hexdigest()
+
     # Check node fields
-    node_1_data = next(n for n in graph["nodes"] if "note1" in n["id"])
+    node_1_data = next(n for n in graph["nodes"] if n["id"] == hash_note_1)
+    assert node_1_data["vault_relative_path"] == "2026/2026-06-01/2026-06-01-note1.md"
     assert node_1_data["file_hash"] == "hash_1"
     assert node_1_data["original_path"] == "/data/project_alpha/src/file1.py"
     # Project tags from original path (src, project_alpha) + custom tag (#custom-tag) + index ([[INDEX_src]])
@@ -183,7 +188,7 @@ def test_scan_and_build_graph(tmp_path: Path) -> None:
     shared_proj_edges = [
         e for e in edges
         if e["type"] == "shared_project_tag"
-        and {e["source"], e["target"]} == {"2026/2026-06-01/2026-06-01-note1.md", "2026/2026-06-01/2026-06-01-note2.md"}
+        and {e["source"], e["target"]} == {hash_note_1, hash_note_2}
     ]
     assert len(shared_proj_edges) >= 2  # at least "src" and "project_alpha"
     
@@ -194,7 +199,7 @@ def test_scan_and_build_graph(tmp_path: Path) -> None:
     ]
     assert len(same_day_edges) == 1
     assert {same_day_edges[0]["source"], same_day_edges[0]["target"]} == {
-        "2026/2026-06-01/2026-06-01-note1.md", "2026/2026-06-01/2026-06-01-note2.md"
+        hash_note_1, hash_note_2
     }
 
     # Find consecutive-day adjacency edges
