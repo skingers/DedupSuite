@@ -23,6 +23,9 @@ import webbrowser
 import tkinter as tk
 from tkinter import messagebox, filedialog
 import concurrent.futures
+import abc
+from enum import Enum, auto
+from dataclasses import dataclass, asdict
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
@@ -37,6 +40,303 @@ from pipeline import run_pipeline
 from config_manager import AppConfig
 
 config = AppConfig()
+
+# --- Boot Assertion Constants ---
+KNOWN_GOOD_HASH: str = "717f416bb33de1f1b30f3c5683b6677121eaa55f8f54ab7fb2277e5c1b0cc463"
+CANONICAL_EXECUTABLE: Optional[str] = None
+
+
+def verify_environment() -> None:
+    """Validate environment, interpreter, and source script integrity at startup."""
+    # 1. Environmental Forensics
+    try:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        script_dir = os.getcwd()
+
+    log_path = os.path.join(script_dir, "dedup_suite.log")
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    log_entry = (
+        f"--- Environmental Forensics ({timestamp}) ---\n"
+        f"sys.executable: {sys.executable}\n"
+        f"sys.version: {sys.version}\n"
+        f"sys.path: {sys.path}\n"
+        f"os.getcwd(): {os.getcwd()}\n"
+        f"------------------------------------------------------\n"
+    )
+
+    try:
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(log_entry)
+    except Exception as e:
+        print(f"Warning: Failed to write to forensics log: {e}", file=sys.stderr)
+
+    # 2. Script Identity (Integrity Check)
+    try:
+        current_file = os.path.abspath(__file__)
+    except NameError:
+        current_file = None
+
+    if current_file and os.path.isfile(current_file):
+        sha256 = hashlib.sha256()
+        try:
+            with open(current_file, "rb") as f:
+                for line in f:
+                    # Skip the line containing the KNOWN_GOOD_HASH declaration to avoid self-reference paradox.
+                    if line.strip().startswith(b"KNOWN_GOOD_HASH"):
+                        continue
+                    sha256.update(line)
+            computed_hash = sha256.hexdigest()
+        except Exception as e:
+            raise RuntimeError(f"Failed to read current script for integrity check: {e}")
+
+        if KNOWN_GOOD_HASH and KNOWN_GOOD_HASH != "PLACEHOLDER":
+            if computed_hash != KNOWN_GOOD_HASH:
+                msg = (
+                    f"Script integrity verification failed!\n"
+                    f"A stale or 'shadow' version of the script is being executed, or the source file "
+                    f"has been modified without updating the KNOWN_GOOD_HASH constant.\n"
+                    f"Expected (KNOWN_GOOD_HASH): {KNOWN_GOOD_HASH}\n"
+                    f"Actual (Computed): {computed_hash}\n"
+                    f"If this is a conscious deployment, please update KNOWN_GOOD_HASH = '{computed_hash}' in dedup_suite.py."
+                )
+                raise RuntimeError(msg)
+        elif KNOWN_GOOD_HASH == "PLACEHOLDER":
+            print(f"[BOOT WARNING] KNOWN_GOOD_HASH is set to PLACEHOLDER. Calculated hash: {computed_hash}", file=sys.stderr)
+
+    # 3. Interpreter Validation
+    if CANONICAL_EXECUTABLE:
+        norm_current = os.path.normcase(os.path.normpath(sys.executable))
+        norm_canonical = os.path.normcase(os.path.normpath(CANONICAL_EXECUTABLE))
+        if norm_current != norm_canonical:
+            msg = (
+                f"Interpreter validation failed!\n"
+                f"The current Python executable does not match the canonical interpreter path.\n"
+                f"Current executable: {sys.executable}\n"
+                f"Expected canonical path: {CANONICAL_EXECUTABLE}"
+            )
+            raise RuntimeError(msg)
+
+
+class StoragePort(abc.ABC):
+    """Abstract port defining storage operations for vault elevation."""
+
+    @abc.abstractmethod
+    def exists(self, path: str) -> bool:
+        """Check if path exists."""
+        pass
+
+    @abc.abstractmethod
+    def put(self, src: str, dest: str) -> None:
+        """Copy file from src to dest."""
+        pass
+
+    @abc.abstractmethod
+    def makedirs(self, path: str) -> None:
+        """Create directory and any missing parent directories."""
+        pass
+
+    @abc.abstractmethod
+    def write_text(self, path: str, content: str) -> None:
+        """Write content to file at path using UTF-8 encoding."""
+        pass
+
+    @abc.abstractmethod
+    def get_basename(self, path: str) -> str:
+        """Get the basename (filename) of a path."""
+        pass
+
+    @abc.abstractmethod
+    def get_mtime(self, path: str) -> float:
+        """Get the modification time of a file."""
+        pass
+
+    @abc.abstractmethod
+    def get_dirname(self, path: str) -> str:
+        """Get the parent directory path of a file."""
+        pass
+
+    @abc.abstractmethod
+    def join_paths(self, *parts: str) -> str:
+        """Join multiple path components."""
+        pass
+
+    @abc.abstractmethod
+    def with_suffix(self, path: str, suffix: str) -> str:
+        """Replace the suffix of a path."""
+        pass
+
+    @abc.abstractmethod
+    def get_relative_posix_path(self, path: str, start: str) -> str:
+        """Get relative path from start, formatted as posix."""
+        pass
+
+    @abc.abstractmethod
+    def get_free_space(self, path: str) -> int:
+        """Get the free space in bytes of the volume containing path."""
+        pass
+
+    @abc.abstractmethod
+    def delete(self, path: str) -> None:
+        """Delete file at path if it exists."""
+        pass
+
+
+class LocalDiskStorage(StoragePort):
+    """Concrete adapter encapsulating local filesystem interactions."""
+
+    def exists(self, path: str) -> bool:
+        return os.path.exists(path)
+
+    def put(self, src: str, dest: str) -> None:
+        shutil.copy2(src, dest)
+
+    def makedirs(self, path: str) -> None:
+        os.makedirs(path, exist_ok=True)
+
+    def write_text(self, path: str, content: str) -> None:
+        Path(path).write_text(content, encoding="utf-8")
+
+    def get_basename(self, path: str) -> str:
+        return os.path.basename(path)
+
+    def get_mtime(self, path: str) -> float:
+        return os.path.getmtime(path)
+
+    def get_dirname(self, path: str) -> str:
+        return os.path.dirname(path)
+
+    def join_paths(self, *parts: str) -> str:
+        return str(Path(os.path.join(*parts)).resolve())
+
+    def with_suffix(self, path: str, suffix: str) -> str:
+        return str(Path(path).with_suffix(suffix))
+
+    def get_relative_posix_path(self, path: str, start: str) -> str:
+        return Path(path).relative_to(start).as_posix()
+
+    def get_free_space(self, path: str) -> int:
+        return shutil.disk_usage(path).free
+
+    def delete(self, path: str) -> None:
+        print(f"[STORAGE] delete() called for path: {path}", flush=True)
+        if os.path.exists(path):
+            os.remove(path)
+
+
+class ElevationStage(Enum):
+    PENDING = auto()
+    VALIDATED = auto()
+    COPIED = auto()
+    VERIFIED = auto()
+    INDEXED = auto()
+    COMPLETE = auto()
+    FAILED = auto()
+
+
+@dataclass
+class ElevationRecord:
+    src_path: str
+    target_path: str
+    stage: ElevationStage
+    failure_stage: Optional[ElevationStage] = None
+    failure_reason: Optional[str] = None
+
+
+def rollback(record: ElevationRecord, storage: StoragePort) -> None:
+    """Check the record's state/failure stage and clean up orphaned files if necessary."""
+    print(f"[ROLLBACK] Invoked for record: {record.src_path} (Failed at stage: {record.failure_stage.name if record.failure_stage else 'UNKNOWN'})", flush=True)
+    if record.target_path:
+        sidecar_path = storage.with_suffix(record.target_path, ".md")
+        
+        # Delete sidecar file if exists
+        try:
+            if storage.exists(sidecar_path):
+                print(f"[ROLLBACK] Removing orphaned sidecar: {sidecar_path}", flush=True)
+                storage.delete(sidecar_path)
+        except Exception as e:
+            print(f"[ROLLBACK] Failed to remove sidecar: {e}", flush=True)
+
+        # Delete main copied file if exists
+        try:
+            if storage.exists(record.target_path):
+                print(f"[ROLLBACK] Removing orphaned target file: {record.target_path}", flush=True)
+                storage.delete(record.target_path)
+        except Exception as e:
+            print(f"[ROLLBACK] Failed to remove target file: {e}", flush=True)
+
+        # Post-Cleanup Check
+        try:
+            target_exists = storage.exists(record.target_path)
+            sidecar_exists = storage.exists(sidecar_path)
+            print(f"[ROLLBACK] Post-Cleanup Check: target_exists={target_exists}, sidecar_exists={sidecar_exists}", flush=True)
+        except Exception:
+            pass
+
+
+def transition_elevation_file(
+    record: ElevationRecord,
+    storage: StoragePort,
+    target_path: str,
+    sidecar_content: str,
+) -> None:
+    """Attempts to transition a file through each elevation stage sequentially.
+
+    If any stage fails, raises the exception which is handled by transitioning
+    the record to FAILED, recording the failure stage, and invoking rollback.
+    """
+    try:
+        # 1. PENDING -> VALIDATED
+        record.stage = ElevationStage.VALIDATED
+        if not storage.exists(record.src_path):
+            raise FileNotFoundError(f"Source file not found: {record.src_path}")
+
+        # 2. VALIDATED -> COPIED
+        record.stage = ElevationStage.COPIED
+        target_parent = storage.get_dirname(target_path)
+        if not target_parent:
+            raise ValueError(f"target_path has no parent directory: {target_path!r}")
+        storage.makedirs(target_parent)
+        storage.put(record.src_path, target_path)
+
+        # 3. COPIED -> VERIFIED
+        record.stage = ElevationStage.VERIFIED
+        if not storage.exists(target_path):
+            raise RuntimeError(
+                f"storage.put completed without error but target file "
+                f"does not exist: {target_path}"
+            )
+
+        # 4. VERIFIED -> INDEXED
+        record.stage = ElevationStage.INDEXED
+        sidecar_path = storage.with_suffix(target_path, ".md")
+        storage.write_text(sidecar_path, sidecar_content)
+
+        # 5. INDEXED -> COMPLETE
+        record.stage = ElevationStage.COMPLETE
+
+    except Exception as e:
+        record.failure_stage = record.stage
+        record.stage = ElevationStage.FAILED
+        record.failure_reason = f"{type(e).__name__}: {str(e)}"
+        rollback(record, storage)
+        raise e
+
+
+def serialize_records(records: List[ElevationRecord]) -> str:
+    """Serialize ElevationRecord objects to JSON, handling Enum serialization."""
+    serialized = []
+    for r in records:
+        serialized.append({
+            "src_path": r.src_path,
+            "target_path": r.target_path,
+            "stage": r.stage.name,
+            "failure_stage": r.failure_stage.name if r.failure_stage else None,
+            "failure_reason": r.failure_reason
+        })
+    return json.dumps(serialized, indent=4)
+
 
 try:
     import customtkinter as ctk
@@ -2664,8 +2964,10 @@ class DedupApp:
             ])
         return csv_entries, reserved
 
-    def _run_elevation_pipeline(self) -> None:
+    def _run_elevation_pipeline(self, storage: Optional[StoragePort] = None) -> None:
         """One-click PLAN → optional EXECUTE pipeline (no blocking dialogs)."""
+        if storage is None:
+            storage = LocalDiskStorage()
         source_path, vault_path = self._elevation_paths_from_config()
         collision_policy = str(config.get("collision_policy", "skip")).lower()
         hashing_depth = str(config.get("hashing_depth", "quick")).lower()
@@ -2718,16 +3020,14 @@ class DedupApp:
 
             self._ensure_file_index_status_column()
             source_label = _obsidian_source_folder_label(source_path)
-            vault_source_root = Path(vault_path).resolve() / source_label
+            vault_source_root = storage.join_paths(vault_path, source_label)
             target_vault_dir = vault_source_root
             records = self._fetch_session_legacy_records(self.current_session_id)
             session_timestamp = time.strftime("%Y%m%d_%H%M%S")
             transaction_id = session_timestamp
-            vault_root = Path(vault_path).resolve()
-            isolation_path = (
-                vault_root / "Isolated_Legacy_Copies" / f"Session_{session_timestamp}"
-            )
-            report_path = vault_root / f"Archive_Manifest_{session_timestamp}.csv"
+            vault_root = storage.join_paths(vault_path)
+            isolation_path = Path(storage.join_paths(vault_root, "Isolated_Legacy_Copies", f"Session_{session_timestamp}"))
+            report_path = Path(storage.join_paths(vault_root, f"Archive_Manifest_{session_timestamp}.csv"))
 
             plan_rows, _reserved = self._build_manifest_rows(
                 records,
@@ -2758,12 +3058,12 @@ class DedupApp:
                 self.log("No golden masters to vault for this session; elevation finished.")
                 self._set_elevation_status("Elevation Complete")
                 try:
-                    index_path = self._write_vault_asset_index_only(vault_source_root, source_label, [])
+                    index_path = self._write_vault_asset_index_only(Path(vault_source_root), source_label, [])
                     self.log(f"Vault index written: {index_path.resolve()}")
                 except OSError as exc:
                     self.log(f"Could not write vault index: {exc}")
                 try:
-                    self._open_path_in_explorer(vault_root)
+                    self._open_path_in_explorer(Path(vault_root))
                     self.log(f"Opened vault destination: {vault_root}")
                 except OSError as exc:
                     self.log(f"Could not open vault folder: {exc}")
@@ -2772,8 +3072,8 @@ class DedupApp:
 
             total_size = sum(r[2] or 0 for r in golden_records)
             try:
-                free_space = shutil.disk_usage(vault_root).free
-            except OSError as exc:
+                free_space = storage.get_free_space(vault_root)
+            except Exception as exc:
                 self.log(f"Elevation aborted: cannot read vault disk space — {exc}")
                 self.root.after(
                     0,
@@ -2800,13 +3100,14 @@ class DedupApp:
                 return
 
             self._set_elevation_status("Executing non-destructive vault copy…")
-            vault_source_root.mkdir(parents=True, exist_ok=True)
+            storage.makedirs(vault_source_root)
             csv_entries: List[List[Any]] = []
             reserved_exec: set = set()
             copied_count = 0
             copied_size = 0
             aborted = False
             vaulted_relpaths: List[str] = []
+            elevation_records: List[ElevationRecord] = []
 
             self.log(f"[PIPELINE] Starting with {len(golden_records)} golden records.")
 
@@ -2816,85 +3117,80 @@ class DedupApp:
                     self.log("Aborted by User.")
                     break
 
-                src_path = Path(fp_str)
-
-                if not src_path.is_file():
-                    self.log(f"[SKIP-NOFILE] {fp_str}")
-                    continue
-
                 try:
                     # --- LOCK: Derive and freeze target_path. Nothing below may alter it. ---
-                    raw_name      = src_path.name
+                    raw_name      = storage.get_basename(fp_str)
                     clean_base    = self.sanitize_filename(raw_name)
-                    file_mtime    = mtime if mtime else os.path.getmtime(src_path)
+                    
+                    try:
+                        file_mtime = mtime if mtime else storage.get_mtime(fp_str)
+                    except Exception:
+                        file_mtime = time.time()
+                        
                     date_prefix   = datetime.fromtimestamp(file_mtime).strftime('%Y-%m-%d')
                     year_folder   = datetime.fromtimestamp(file_mtime).strftime('%Y')
                     final_name    = f"{date_prefix}_{clean_base}"
 
                     # Insert the [YYYY] subdirectory as per your architecture requirement
-                    year_dir      = Path(target_vault_dir) / year_folder
-                    target_path   = str((year_dir / final_name).resolve())
+                    target_path   = storage.join_paths(target_vault_dir, year_folder, final_name)
                     # target_path is now a plain immutable str. Do not reassign it.
 
-                    self.log(
-                        f"[PIPELINE] [{i+1}/{len(golden_records)}] "
-                        f"src={raw_name} -> target={target_path}"
+                    # Instantiate record in PENDING state
+                    record = ElevationRecord(
+                        src_path=fp_str,
+                        target_path=target_path,
+                        stage=ElevationStage.PENDING
                     )
+                    elevation_records.append(record)
 
                     # --- CHECK: Filesystem existence only. DB state is irrelevant here. ---
-                    if os.path.exists(target_path):
+                    if storage.exists(target_path):
                         self.log(f"[SKIP-EXISTS] {target_path}")
                         csv_entries.append([
                             "SKIPPED",
                             raw_name,
-                            str(src_path),
+                            fp_str,
                             target_path,
                             time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(file_mtime)),
                             f"{(size or 0) / (1024*1024):.2f}",
                             transaction_id,
                             self.current_session_id,
                         ])
+                        record.stage = ElevationStage.COMPLETE
                         continue
 
-                    # --- EXECUTE: makedirs on the resolved parent, then atomic copy. ---
-                    target_parent = os.path.dirname(target_path)
-                    if not target_parent:
-                        raise ValueError(
-                            f"target_path has no parent directory: {target_path!r}. "
-                            f"Check target_vault_dir={target_vault_dir!r}"
-                        )
-                    os.makedirs(target_parent, exist_ok=True)
-                    shutil.copy2(str(src_path), target_path)
-
-                    # --- VERIFY: Confirm the file actually landed before recording. ---
-                    if not os.path.exists(target_path):
-                        raise RuntimeError(
-                            f"shutil.copy2 completed without error but {target_path} "
-                            f"does not exist. Possible permissions or path issue."
-                        )
+                    self.log(
+                        f"[PIPELINE] [{i+1}/{len(golden_records)}] "
+                        f"src={raw_name} -> target={target_path}"
+                    )
 
                     # Sidecar markdown
-                    dest_path_obj  = Path(target_path)
-                    sidecar_path   = dest_path_obj.with_suffix(".md")
                     sidecar_content = (
                         "---\n"
                         f"original_filename: {raw_name}\n"
-                        f"vaulted_name: {dest_path_obj.name}\n"
+                        f"vaulted_name: {storage.get_basename(target_path)}\n"
                         "---\n"
                         f"# {raw_name}\n\n"
                         "Vaulted binary asset.\n"
                     )
-                    sidecar_path.write_text(sidecar_content, encoding="utf-8")
 
-                    # Manifest
-                    rel = Path(target_path).relative_to(vault_source_root).as_posix()
+                    # Drive the State Machine transitions
+                    transition_elevation_file(
+                        record=record,
+                        storage=storage,
+                        target_path=target_path,
+                        sidecar_content=sidecar_content
+                    )
+
+                    # Manifest relative paths
+                    rel = storage.get_relative_posix_path(target_path, vault_source_root)
                     vaulted_relpaths.append(rel)
 
                     size_mb = f"{(size or 0) / (1024*1024):.2f}"
                     csv_entries.append([
                         "COPIED",
                         raw_name,
-                        str(src_path),
+                        fp_str,
                         target_path,
                         time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(file_mtime)),
                         size_mb,
@@ -2922,6 +3218,15 @@ class DedupApp:
             if csv_entries:
                 self._write_archive_manifest(report_path, csv_entries)
 
+            if elevation_records:
+                try:
+                    manifest_path = Path(storage.join_paths(vault_root, f"run_manifest_{session_timestamp}.json"))
+                    manifest_json = serialize_records(elevation_records)
+                    storage.write_text(str(manifest_path), manifest_json)
+                    self.log(f"JSON run manifest written: {manifest_path.resolve()}")
+                except Exception as exc:
+                    self.log(f"Failed to write run manifest: {exc}")
+
             if aborted:
                 self._set_elevation_status("Elevation aborted")
                 self.root.after(0, self.update_datamine_stats)
@@ -2929,7 +3234,7 @@ class DedupApp:
 
             try:
                 index_path = self._write_vault_asset_index_only(
-                    vault_source_root, source_label, vaulted_relpaths,
+                    Path(vault_source_root), source_label, vaulted_relpaths,
                 )
                 self.log(f"Vault index written: {index_path.resolve()}")
             except OSError as exc:
@@ -2942,7 +3247,7 @@ class DedupApp:
             self.log("Original source files remain untouched (non-destructive copy2).")
             self._set_elevation_status("Elevation Complete")
             try:
-                self._open_path_in_explorer(vault_root)
+                self._open_path_in_explorer(Path(vault_root))
                 self.log(f"Opened vault destination: {vault_root}")
             except OSError as exc:
                 self.log(f"Could not open vault folder: {exc}")
@@ -3766,7 +4071,8 @@ class DedupApp:
         self.btn_pause.configure(state="normal", text="Pause")
         self.current_session_id = str(uuid.uuid4())
         self._set_elevation_status("Starting elevation…")
-        threading.Thread(target=self._run_elevation_pipeline, daemon=True).start()
+        storage = LocalDiskStorage()
+        threading.Thread(target=lambda: self._run_elevation_pipeline(storage), daemon=True).start()
 
     def export_knowledge_graph(
         self,
@@ -4169,6 +4475,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     Args:
         argv: Optional argument vector (defaults to ``sys.argv[1:]``).
     """
+    verify_environment()
     parser = argparse.ArgumentParser(
         prog="dedup_suite",
         description="DedupSuite deduplication engine (GUI by default, headless when given a target).",
