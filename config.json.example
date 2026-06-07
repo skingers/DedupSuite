@@ -2,7 +2,7 @@
     "copy_method": "copy2",
     "collision_policy": "skip",
     "vault_path": "",
-    "last_source": "C:/Users/marks/Documents/Legal Docs Commercial",
+    "last_source": "",
     "last_dest": "",
     "scan_mode": "Exact Match (Fast)",
     "threshold": 0,
@@ -13,5 +13,6 @@
     "merge_master": "",
     "merge_incoming": "",
     "journey_export_mode": "Standard Mode",
-    "simulate_only": false
+    "simulate_only": false,
+    "proLicenseKey": ""
 }

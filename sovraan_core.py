@@ -4555,12 +4555,12 @@ def run_headless(args: argparse.Namespace) -> int:
         Process exit code: ``0`` on success, non-zero on a fatal error.
     """
     def log(message: str) -> None:
-        print(f"[DEDUP] {message}", flush=True)
+        print(f"[sovraan] {message}", flush=True)
 
     source = getattr(args, "source", None) or args.target
     target = os.path.abspath(source)
     if not os.path.isdir(target):
-        print(f"[DEDUP] ERROR: source is not a directory: {target}", file=sys.stderr, flush=True)
+        print(f"[sovraan] ERROR: source is not a directory: {target}", file=sys.stderr, flush=True)
         return 2
 
     if args.db:

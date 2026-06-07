@@ -25,7 +25,14 @@ Always ensure the active terminal session runs inside the isolated context:
 .venv\Scripts\activate.bat
 ```
 
-### Step 3: Install Core Dependencies
+### Step 3: Application configuration
+Copy the settings template before first launch (keeps personal paths out of git):
+
+```powershell
+Copy-Item config.json.example config.json
+```
+
+### Step 4: Install Core Dependencies
 Install the required packages listed in the manifest:
 ```bash
 python -m pip install --upgrade pip
@@ -35,6 +42,7 @@ python -m pip install -r requirements.txt
 ---
 
 ## 2. Launching the Platform Orchestrator
+
 
 The system orchestration GUI executes locally. Ensure your virtual environment is active before starting the program:
 

@@ -7,6 +7,11 @@ lab_ingest.db
 stress_*.db
 move_targets.json
 settings.json
+config.json
+sovraan_processed_state.json
+
+# Local dev scratch (not part of the product)
+build_avatar.html
 
 # --- Build Artifacts (PyInstaller) ---
 build/
