@@ -1,8 +1,8 @@
 {
-  "name": "dedupsuite-integration",
+  "name": "sovraan-obsidian-satellite",
   "version": "2.0.0",
   "private": true,
-  "description": "DedupSuite 2.0 Obsidian bridge",
+  "description": "sovraan core link",
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "node esbuild.config.mjs production"

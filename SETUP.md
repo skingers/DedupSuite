@@ -6,7 +6,7 @@ Follow this guide to isolate your local environment, install dependencies, run t
 
 ## 1. Virtual Environment Isolation
 
-To prevent package drift, dependency conflicts, or MCP runtime collisions, DedupSuite must be run inside an isolated Python virtual environment (`.venv`).
+To prevent package drift, dependency conflicts, or MCP runtime collisions, sovraan must be run inside an isolated Python virtual environment (`.venv`).
 
 ### Step 1: Initialize Virtual Environment
 Navigate to the root directory of the project and create the environment:
@@ -39,7 +39,7 @@ python -m pip install -r requirements.txt
 The system orchestration GUI executes locally. Ensure your virtual environment is active before starting the program:
 
 ```bash
-python dedup_suite.py
+python sovraan_core.py
 ```
 
 *Note: The GUI will automatically create or migration-check `data_mine.db` and scan configurations upon startup.*
@@ -76,7 +76,35 @@ python -m pytest tests/test_validator.py
 
 ---
 
-## 4. GitLab Developer Workflow
+## 4. Obsidian Plugin Integration
+
+The production Obsidian bridge lives in `obsidian-plugin/` inside this repository. A separate **free** community distribution is maintained at `sovraan-obsidian-plugin` (GitLab).
+
+### Embedded plugin (this repo)
+
+| Setting | Value |
+|---|---|
+| Plugin ID | `sovraan-obsidian-satellite` |
+| Backend script | `sovraan_core.py` |
+| Headless contract | `--headless --source <vault> --destination <vault> --db <data_mine.db> --notarise` |
+
+Build the plugin from `obsidian-plugin/`:
+
+```bash
+cd obsidian-plugin
+npm install
+npm run build
+```
+
+Copy `dist/` into your vault at `.obsidian/plugins/sovraan-obsidian-satellite/`.
+
+### Community plugin (separate repo)
+
+The community plugin does not bundle the commercial Python engine. Users configure local paths to their installed sovraan build. Keep CLI arguments aligned with `obsidian-plugin/src/execution_engine.ts` when changing headless mode.
+
+---
+
+## 5. GitLab Developer Workflow
 
 All repositories and build tasks are hosted exclusively on GitLab. 
 

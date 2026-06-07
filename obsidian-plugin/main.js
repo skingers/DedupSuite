@@ -1,4 +1,4 @@
-/* DedupSuite 2.0 Obsidian bridge — built for production */
+/* sovraan 2.0 Obsidian bridge — built for production */
 "use strict";
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -4388,7 +4388,7 @@ var require_nacl_fast = __commonJS({
 // src/main.ts
 var main_exports = {};
 __export(main_exports, {
-  default: () => DedupSuiteBridgePlugin,
+  default: () => sovraanBridgePlugin,
   iconSvgForObsidian: () => iconSvgForObsidian
 });
 module.exports = __toCommonJS(main_exports);
@@ -4504,7 +4504,7 @@ var SettingsManager = class {
     await this.save();
   }
 };
-var DedupSuiteSettingTab = class extends import_obsidian.PluginSettingTab {
+var sovraanSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -4515,21 +4515,21 @@ var DedupSuiteSettingTab = class extends import_obsidian.PluginSettingTab {
     const manager = this.plugin.getSettingsManager();
     const settings = manager.get();
     new import_obsidian.Setting(containerEl).setName("Database Path").setDesc(
-      "Absolute path to the DedupSuite production SQLite database. Used for file_index lookups, metadata, and batch_signatures verification."
+      "Absolute path to the sovraan production SQLite database. Used for file_index lookups, metadata, and batch_signatures verification."
     ).addText(
-      (text) => text.setPlaceholder("D:\\DedupSuite\\data_mine.db").setValue(settings.databasePath).onChange(async (value) => {
+      (text) => text.setPlaceholder("D:\\sovraan\\data_mine.db").setValue(settings.databasePath).onChange(async (value) => {
         await manager.update({ databasePath: value.trim() });
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Python interpreter").setDesc("Command or absolute path used to launch the DedupSuite backend.").addText(
+    new import_obsidian.Setting(containerEl).setName("Python interpreter").setDesc("Command or absolute path used to launch the sovraan backend.").addText(
       (text) => text.setPlaceholder("python").setValue(settings.pythonPath).onChange(async (value) => {
         await manager.update({ pythonPath: value.trim() });
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Backend script path").setDesc("Absolute path to dedup_suite.py (headless ingest / notarise).").addText(
-      (text) => text.setPlaceholder("D:\\DedupSuite\\dedup_suite.py").setValue(settings.backendScriptPath).onChange(async (value) => {
+    new import_obsidian.Setting(containerEl).setName("Backend script path").setDesc("Absolute path to sovraan_core.py (headless ingest / notarise).").addText(
+      (text) => text.setPlaceholder("D:\\sovraan\\sovraan_core.py").setValue(settings.backendScriptPath).onChange(async (value) => {
         await manager.update({ backendScriptPath: value.trim() });
         await this.plugin.saveSettings();
       })
@@ -4720,31 +4720,31 @@ var ERROR_NOTICE_MS = 15e3;
 var FORBIDDEN_PATH_PATTERN = /[\0\r\n;&|`$<>"']/;
 function translateExecutionError(error) {
   if (error instanceof PathValidationError) {
-    return `DedupSuite configuration is invalid: ${error.message}`;
+    return `sovraan configuration is invalid: ${error.message}`;
   }
   const err = error instanceof Error ? error : new Error(String(error));
   const code = err.code;
   const combined = `${code ?? ""} ${err.message}`.toLowerCase();
   if (code === "ENOENT" || combined.includes("enoent")) {
     if (combined.includes("python") || combined.includes("spawn")) {
-      return "DedupSuite could not find the Python interpreter. Check the Python path in settings.";
+      return "sovraan could not find the Python interpreter. Check the Python path in settings.";
     }
     if (combined.includes(".py") || combined.includes("script")) {
-      return "DedupSuite could not find the backend script. Check the backend script path in settings.";
+      return "sovraan could not find the backend script. Check the backend script path in settings.";
     }
-    return "DedupSuite could not find a required file or folder. Verify your paths in settings.";
+    return "sovraan could not find a required file or folder. Verify your paths in settings.";
   }
   if (code === "EACCES" || combined.includes("eacces") || combined.includes("permission denied")) {
-    return "DedupSuite could not access a configured path. Check folder permissions.";
+    return "sovraan could not access a configured path. Check folder permissions.";
   }
   const backendExit = /^backend failed \(code (\d+)\)/i.exec(err.message);
   if (backendExit) {
-    return `DedupSuite backend exited with an error (code ${backendExit[1]}). Enable debug logging for details.`;
+    return `sovraan backend exited with an error (code ${backendExit[1]}). Enable debug logging for details.`;
   }
   if (combined.includes("failed to launch")) {
-    return "DedupSuite could not start the Python backend. Check your Python and script paths in settings.";
+    return "sovraan could not start the Python backend. Check your Python and script paths in settings.";
   }
-  return "DedupSuite encountered an unexpected error. Enable debug logging for technical details.";
+  return "sovraan encountered an unexpected error. Enable debug logging for technical details.";
 }
 function showUserError(error, duration = ERROR_NOTICE_MS) {
   new import_obsidian2.Notice(translateExecutionError(error), duration);
@@ -4782,7 +4782,7 @@ var ExecutionEngine = class _ExecutionEngine {
     }
   }
   /**
-   * Runs dedup_suite.py headless against the vault with explicit production paths.
+   * Runs sovraan_core.py headless against the vault with explicit production paths.
    */
   async runBackend(vaultPath) {
     let scriptPath;
@@ -4834,7 +4834,7 @@ var ExecutionEngine = class _ExecutionEngine {
         if (settled) return;
         settled = true;
         if (code === 0) {
-          new import_obsidian2.Notice("DedupSuite: backend completed successfully.", 5e3);
+          new import_obsidian2.Notice("sovraan: backend completed successfully.", 5e3);
           resolve({ success: true, exitCode: 0, stdout, stderr });
         } else {
           settleFailure(new Error(`Backend failed (code ${code}): ${stderr.trim()}`));
@@ -4845,9 +4845,9 @@ var ExecutionEngine = class _ExecutionEngine {
 };
 
 // src/main.ts
-var RIBBON_ICON_ID = "dedupsuite-ribbon";
+var RIBBON_ICON_ID = "sovraan-ribbon";
 var RIBBON_FALLBACK_ICON = "shield";
-var RIBBON_SVG_FILENAME = "dedupsuite icon ONLY_3.svg";
+var RIBBON_SVG_FILENAME = "sovraan_icon_only.svg";
 var RIBBON_SOURCE_VIEWBOX = 512;
 var OBSIDIAN_ICON_VIEWBOX = 100;
 var RIBBON_ICON_SCALE = OBSIDIAN_ICON_VIEWBOX / RIBBON_SOURCE_VIEWBOX;
@@ -4860,7 +4860,7 @@ function iconSvgForObsidian(raw) {
   inner = inner.replace(/\sstroke="[^"]*"/gi, ' stroke="currentColor"');
   return `<g fill="currentColor" transform="scale(${RIBBON_ICON_SCALE})">${inner}</g>`;
 }
-var DedupSuiteBridgePlugin = class extends import_obsidian3.Plugin {
+var sovraanBridgePlugin = class extends import_obsidian3.Plugin {
   constructor() {
     super(...arguments);
     this.settings = { ...DEFAULT_SETTINGS };
@@ -4869,20 +4869,20 @@ var DedupSuiteBridgePlugin = class extends import_obsidian3.Plugin {
     this.settingsManager = new SettingsManager(this);
     await this.loadSettings();
     this.registerRibbonIcon();
-    this.addSettingTab(new DedupSuiteSettingTab(this.app, this));
+    this.addSettingTab(new sovraanSettingTab(this.app, this));
     if (this.settings.verifySignaturesOnStartup) {
       void this.runSignatureVerification();
     }
     this.addCommand({
-      id: "dedupsuite-verify-signatures",
+      id: "sovraan-verify-signatures",
       name: "Verify ingest signatures (Ed25519)",
       callback: () => {
         void this.runSignatureVerification();
       }
     });
     this.addCommand({
-      id: "dedupsuite-run-backend",
-      name: "Run DedupSuite notarisation sweep on vault",
+      id: "sovraan-run-backend",
+      name: "Run sovraan notarisation sweep on vault",
       callback: () => {
         void this.triggerDedupExecution();
       }
@@ -4908,11 +4908,11 @@ var DedupSuiteBridgePlugin = class extends import_obsidian3.Plugin {
     return this.settingsManager;
   }
   notifyUser(message, duration = 5e3) {
-    new import_obsidian3.Notice(`DedupSuite: ${message}`, duration);
+    new import_obsidian3.Notice(`sovraan: ${message}`, duration);
   }
   debugLog(message, detail) {
     if (this.settings.enableDebugLogging) {
-      console.warn(`[DedupSuite] ${message}`, detail ?? "");
+      console.warn(`[sovraan] ${message}`, detail ?? "");
     }
   }
   createDbReader() {
@@ -4955,7 +4955,7 @@ var DedupSuiteBridgePlugin = class extends import_obsidian3.Plugin {
     const iconPath = (0, import_path4.join)(
       this.app.vault.adapter.getBasePath?.() ?? "",
       this.manifest.dir ?? "",
-      "assets",
+      "..",
       RIBBON_SVG_FILENAME
     );
     const onRibbonClick = () => {
@@ -4964,10 +4964,10 @@ var DedupSuiteBridgePlugin = class extends import_obsidian3.Plugin {
     try {
       const rawSvg = (0, import_fs2.readFileSync)(iconPath, "utf8");
       (0, import_obsidian3.addIcon)(RIBBON_ICON_ID, iconSvgForObsidian(rawSvg));
-      this.addRibbonIcon(RIBBON_ICON_ID, "DedupSuite 2.0", onRibbonClick);
+      this.addRibbonIcon(RIBBON_ICON_ID, "sovraan 2.0", onRibbonClick);
     } catch (err) {
-      console.warn("[DedupSuite] Ribbon icon failed to load, falling back:", err);
-      this.addRibbonIcon(RIBBON_FALLBACK_ICON, "DedupSuite 2.0", onRibbonClick);
+      console.warn("[sovraan] Ribbon icon failed to load, falling back:", err);
+      this.addRibbonIcon(RIBBON_FALLBACK_ICON, "sovraan 2.0", onRibbonClick);
     }
   }
   triggerDedupExecution() {

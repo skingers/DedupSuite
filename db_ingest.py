@@ -1,7 +1,7 @@
-"""SQLite batch ingest for the DedupSuite concurrent pipeline.
+"""SQLite batch ingest for the sovraan concurrent pipeline.
 
 Optimized bulk writes (WAL, deferred indexing, batched ``executemany``) aligned
-with the production ``file_index`` schema used by :class:`~dedup_suite.DatabaseManager`.
+with the production ``file_index`` schema used by :class:`~sovraan_core.DatabaseManager`.
 
 Production vault export (hierarchical dated folders, synchronous cloud notary)
 lives in :func:`export_golden_vault` and related helpers in this module.

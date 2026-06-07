@@ -1,8 +1,8 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import { isAbsolute, normalize } from "path";
-import type DedupSuiteBridgePlugin from "./main";
+import type sovraanBridgePlugin from "./main";
 
-export interface DedupSuiteSettings {
+export interface sovraan {
   /** Absolute path to the production SQLite database (e.g. data_mine.db). */
   databasePath: string;
   pythonPath: string;
@@ -12,7 +12,7 @@ export interface DedupSuiteSettings {
   verifySignaturesOnStartup: boolean;
 }
 
-export const DEFAULT_SETTINGS: DedupSuiteSettings = Object.freeze({
+export const DEFAULT_SETTINGS: sovraan = Object.freeze({
   databasePath: "",
   pythonPath: "python",
   backendScriptPath: "",
@@ -40,12 +40,12 @@ export function resolveDatabasePath(raw: string, label = "Database Path"): strin
 }
 
 export class SettingsManager {
-  private settings: DedupSuiteSettings = { ...DEFAULT_SETTINGS };
+  private settings: sovraan = { ...DEFAULT_SETTINGS };
 
   constructor(private readonly persistence: { loadData(): Promise<unknown>; saveData(data: unknown): Promise<void> }) {}
 
-  async load(): Promise<DedupSuiteSettings> {
-    const loaded = (await this.persistence.loadData()) as Partial<DedupSuiteSettings> & {
+  async load(): Promise<sovraan> {
+    const loaded = (await this.persistence.loadData()) as Partial<sovraan> & {
       debugMode?: boolean;
       autoVerifyOnStartup?: boolean;
     } | null;
@@ -63,18 +63,18 @@ export class SettingsManager {
     await this.persistence.saveData(this.settings);
   }
 
-  get(): DedupSuiteSettings {
+  get(): sovraan {
     return this.settings;
   }
 
-  async update(patch: Partial<DedupSuiteSettings>): Promise<void> {
+  async update(patch: Partial<sovraan>): Promise<void> {
     this.settings = { ...this.settings, ...patch };
     await this.save();
   }
 }
 
-export class DedupSuiteSettingTab extends PluginSettingTab {
-  constructor(app: App, private readonly plugin: DedupSuiteBridgePlugin) {
+export class sovraanSettingTab extends PluginSettingTab {
+  constructor(app: App, private readonly plugin: sovraanBridgePlugin) {
     super(app, plugin);
   }
 
@@ -87,11 +87,11 @@ export class DedupSuiteSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Database Path")
       .setDesc(
-        "Absolute path to the DedupSuite production SQLite database. Used for file_index lookups, metadata, and batch_signatures verification."
+        "Absolute path to the sovraan production SQLite database. Used for file_index lookups, metadata, and batch_signatures verification."
       )
       .addText((text) =>
         text
-          .setPlaceholder("D:\\DedupSuite\\data_mine.db")
+          .setPlaceholder("D:\\sovraan\\data_mine.db")
           .setValue(settings.databasePath)
           .onChange(async (value) => {
             await manager.update({ databasePath: value.trim() });
@@ -101,7 +101,7 @@ export class DedupSuiteSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Python interpreter")
-      .setDesc("Command or absolute path used to launch the DedupSuite backend.")
+      .setDesc("Command or absolute path used to launch the sovraan backend.")
       .addText((text) =>
         text
           .setPlaceholder("python")
@@ -114,10 +114,10 @@ export class DedupSuiteSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Backend script path")
-      .setDesc("Absolute path to dedup_suite.py (headless ingest / notarise).")
+      .setDesc("Absolute path to sovraan_core.py (headless ingest / notarise).")
       .addText((text) =>
         text
-          .setPlaceholder("D:\\DedupSuite\\dedup_suite.py")
+          .setPlaceholder("D:\\sovraan\\sovraan_core.py")
           .setValue(settings.backendScriptPath)
           .onChange(async (value) => {
             await manager.update({ backendScriptPath: value.trim() });

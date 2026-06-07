@@ -13,15 +13,15 @@ import { DedupDBReader } from "./db_reader";
 import { ExecutionEngine } from "./execution_engine";
 import {
   DEFAULT_SETTINGS,
-  DedupSuiteSettingTab,
+  sovraanSettingTab,
   resolveDatabasePath,
   SettingsManager,
-  type DedupSuiteSettings,
+  type sovraan,
 } from "./settings";
 
-const RIBBON_ICON_ID = "dedupsuite-ribbon";
+const RIBBON_ICON_ID = "sovraan-ribbon";
 const RIBBON_FALLBACK_ICON = "shield";
-const RIBBON_SVG_FILENAME = "dedupsuite icon ONLY_3.svg";
+const RIBBON_SVG_FILENAME = "sovraan_icon_only.svg";
 const RIBBON_SOURCE_VIEWBOX = 512;
 const OBSIDIAN_ICON_VIEWBOX = 100;
 const RIBBON_ICON_SCALE = OBSIDIAN_ICON_VIEWBOX / RIBBON_SOURCE_VIEWBOX;
@@ -36,22 +36,22 @@ export function iconSvgForObsidian(raw: string): string {
   return `<g fill="currentColor" transform="scale(${RIBBON_ICON_SCALE})">${inner}</g>`;
 }
 
-export default class DedupSuiteBridgePlugin extends Plugin {
-  settings: DedupSuiteSettings = { ...DEFAULT_SETTINGS };
+export default class sovraanBridgePlugin extends Plugin {
+  settings: sovraan = { ...DEFAULT_SETTINGS };
   private settingsManager!: SettingsManager;
 
   async onload(): Promise<void> {
     this.settingsManager = new SettingsManager(this);
     await this.loadSettings();
     this.registerRibbonIcon();
-    this.addSettingTab(new DedupSuiteSettingTab(this.app, this));
+    this.addSettingTab(new sovraanSettingTab(this.app, this));
 
     if (this.settings.verifySignaturesOnStartup) {
       void this.runSignatureVerification();
     }
 
     this.addCommand({
-      id: "dedupsuite-verify-signatures",
+      id: "sovraan-verify-signatures",
       name: "Verify ingest signatures (Ed25519)",
       callback: () => {
         void this.runSignatureVerification();
@@ -59,8 +59,8 @@ export default class DedupSuiteBridgePlugin extends Plugin {
     });
 
     this.addCommand({
-      id: "dedupsuite-run-backend",
-      name: "Run DedupSuite notarisation sweep on vault",
+      id: "sovraan-run-backend",
+      name: "Run sovraan notarisation sweep on vault",
       callback: () => {
         void this.triggerDedupExecution();
       },
@@ -83,7 +83,7 @@ export default class DedupSuiteBridgePlugin extends Plugin {
     this.settings = { ...this.settingsManager.get() };
   }
 
-  getSettings(): DedupSuiteSettings {
+  getSettings(): sovraan {
     return this.settings;
   }
 
@@ -92,12 +92,12 @@ export default class DedupSuiteBridgePlugin extends Plugin {
   }
 
   notifyUser(message: string, duration = 5000): void {
-    new Notice(`DedupSuite: ${message}`, duration);
+    new Notice(`sovraan: ${message}`, duration);
   }
 
   debugLog(message: string, detail?: unknown): void {
     if (this.settings.enableDebugLogging) {
-      console.warn(`[DedupSuite] ${message}`, detail ?? "");
+      console.warn(`[sovraan] ${message}`, detail ?? "");
     }
   }
 
@@ -143,7 +143,7 @@ export default class DedupSuiteBridgePlugin extends Plugin {
     const iconPath = join(
       this.app.vault.adapter.getBasePath?.() ?? "",
       this.manifest.dir ?? "",
-      "assets",
+      "..",
       RIBBON_SVG_FILENAME
     );
     const onRibbonClick = () => {
@@ -152,10 +152,10 @@ export default class DedupSuiteBridgePlugin extends Plugin {
     try {
       const rawSvg = readFileSync(iconPath, "utf8");
       addIcon(RIBBON_ICON_ID, iconSvgForObsidian(rawSvg));
-      this.addRibbonIcon(RIBBON_ICON_ID, "DedupSuite 2.0", onRibbonClick);
+      this.addRibbonIcon(RIBBON_ICON_ID, "sovraan 2.0", onRibbonClick);
     } catch (err) {
-      console.warn("[DedupSuite] Ribbon icon failed to load, falling back:", err);
-      this.addRibbonIcon(RIBBON_FALLBACK_ICON, "DedupSuite 2.0", onRibbonClick);
+      console.warn("[sovraan] Ribbon icon failed to load, falling back:", err);
+      this.addRibbonIcon(RIBBON_FALLBACK_ICON, "sovraan 2.0", onRibbonClick);
     }
   }
 

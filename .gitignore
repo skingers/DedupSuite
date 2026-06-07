@@ -13,7 +13,7 @@ build/
 dist/
 *.spec
 # The canonical build spec is a tracked deliverable.
-!dedup_suite.spec
+!sovraan.spec
 
 # --- Project Clutter & Legacy Directories ---
 shadow_lab/

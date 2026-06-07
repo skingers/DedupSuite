@@ -69,9 +69,9 @@ def test_parse_date() -> None:
 
 
 def test_extract_project_tags_from_path() -> None:
-    tags = extract_project_tags_from_path("/Users/marks/dev/projects/DedupSuite/core/notary.py")
+    tags = extract_project_tags_from_path("/Users/marks/dev/projects/sovraan/core/notary.py")
     assert "core" in tags
-    assert "DedupSuite" in tags
+    assert "sovraan" in tags
     # Ignored paths like dev, projects, users should not be in tags
     assert "dev" not in tags
     assert "projects" not in tags

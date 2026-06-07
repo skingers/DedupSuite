@@ -1,4 +1,4 @@
-"""Sovereign Vector Engine for DedupSuite.
+"""Sovereign Vector Engine for sovraan.
 
 Ingests graph_manifest.json, loads companion sidecar contents, embeds them using
 sentence-transformers, and stores/queries the vectors via a local ChromaDB instance.

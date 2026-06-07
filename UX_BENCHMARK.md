@@ -1,6 +1,6 @@
 # UX Benchmark & Friction Report
 
-This document presents the programmatic user experience (UX) benchmarks, click-depth diagnostics, cognitive load analysis, and qualitative manual testing protocols for the DedupSuite Standalone Application.
+This document presents the programmatic user experience (UX) benchmarks, click-depth diagnostics, cognitive load analysis, and qualitative manual testing protocols for the sovraan Standalone Application.
 
 ---
 
@@ -11,17 +11,17 @@ Core user journeys were programmatically stimulated and audited to determine the
 
 | Core User Journey | Audited Clicks | Limit | Status | Diagnostic Notes |
 | :--- | :---: | :---: | :---: | :--- |
-| **First Run Ingestion** | **3 Clicks** | ≤ 3 | **PASS** | 1. Select Source (1 click)<br>2. Select Vault Destination (1 click)<br>3. Trigger "Elevate & Vault" (1 click) |
-| **Semantic Search Query** | **2 Clicks** | ≤ 3 | **PASS** | 1. Switch to "Vault Chat" tab (1 click)<br>2. Click "Send" (1 click, with automatic `<Return>` binding) |
-| **Fidelity Verification** | **2 Clicks** | ≤ 3 | **PASS** | 1. Switch to "Pro Studio" tab (1 click)<br>2. Click "Rationalize" or view recent records (1 click) |
+| **First Run Ingestion** | **3 Clicks** | ≤ 3 | **PASS** | 1. Select Source (1 click)<br>2. Select Vault Destination (1 click)<br>3. Trigger **Begin Rescue** (1 click) |
+| **Semantic Search Query** | **2 Clicks** | ≤ 3 | **PASS** | 1. Switch to **Expert Studio** tab (1 click)<br>2. Click **Send** in Vault Chat (1 click, with automatic `<Return>` binding) |
+| **Fidelity Verification** | **2 Clicks** | ≤ 3 | **PASS** | 1. Switch to **The Vault Index** tab (1 click)<br>2. Click **Rationalize** or view recent records (1 click) |
 
 ### 2. Decision Fatigue & Cognitive Load Audit
 The UI was audited against standard interface complexity benchmarks:
-*   **Default State Complexity**: The default view is clean and focused. By separating "Vault Elevation" (the primary ingest flow) from "Pro Studio" (advanced configurations, database management, and recovery options) and "Vault Chat" (the semantic interface), the application prevents layout clutter.
+*   **Default State Complexity**: The default **Your Journey** tab is clean and focused. **Merge Folders**, **Expert Studio**, and **The Vault Index** isolate advanced workflows so the primary rescue path stays uncluttered.
 *   **Exposed Toggles**:
-    *   *Audit Mode Selection*: The option to select "Exact" vs "Visual" hashing is visible on the primary screen. This can cause initial friction for new users.
-    *   *Option Toggles*: Checks for "Simulate Only," "Review Duplicates," and "Notarize" are presented in simple checkboxes, but they are localized inside configuration frames, minimizing raw exposure.
-*   **UI Hierarchy Improvement**: Moving raw database paths and advanced sliders (like the "Truthfulness" slider) into the "Pro Studio" tab successfully keeps the main "Vault Elevation" screen free of technical overhead.
+    *   *Export profile*: Step 3 uses a native `CTkSegmentedButton` (**Standard Mode** / **Intelligence Mode**) on Your Journey.
+    *   *Scanner toggles*: Hashing depth, duplicate review, and notarisation live in **Expert Studio**, not on the primary rescue screen.
+*   **UI Hierarchy Improvement**: Database paths, simulate-only, vault commit, and maintenance controls live in **The Vault Index**.
 
 ### 3. Performance Metrics
 Responsiveness benchmarks measured during E2E simulation (Windows Local Workstation):
@@ -35,10 +35,10 @@ Responsiveness benchmarks measured during E2E simulation (Windows Local Workstat
 To elevate the standalone application from a "technical utility" to a "seamless product," we recommend the following enhancements:
 
 1.  **Introduce Progressive Disclosure**:
-    *   *Action*: Hide the Hashing Mode Option ("Exact" vs "Visual") and Notarize checkboxes from the main Vault Elevation tab under an "Advanced Settings" foldout frame.
-    *   *Result*: Simplifies the primary screen to only two directories (Source, Destination) and a single prominent call-to-action button.
+    *   *Action*: Keep hashing and notarise controls in **Expert Studio** only.
+    *   *Result*: Your Journey shows source, destination, export profile, and **Begin Rescue** only.
 2.  **Interactive Drag-and-Drop Visualization**:
-    *   *Action*: Add a dynamic visual hover effect on the drag-and-drop frame (e.g. changing border dash patterns or color gradients) when a user drags a folder into the window.
+    *   *Action*: Add a dynamic visual hover effect on the drag-and-drop frame when a user drags a folder into the window.
 3.  **Visual Progress Dashboard**:
     *   *Action*: Enhance the simple progress bar with a ring/radial gauge or a smooth micro-animation during active scans, alongside visual file counters.
 4.  **Inline Notary Provenance Indicators**:
@@ -53,13 +53,13 @@ This protocol is designed for the **System Owner** to manually review the standa
 ### Step-by-Step Walkthrough
 
 ```
-[Boot Application] ──► [Evaluate Ingestion Flow] ──► [Evaluate Vault Chat] ──► [Evaluate Pro Studio]
+[Boot Application] ──► [Your Journey] ──► [Expert Studio / Vault Chat] ──► [The Vault Index]
 ```
 
 #### Step 1: First Impression & Startup
 1.  Launch the standalone application:
     ```bash
-    python dedup_suite.py
+    python sovraan_core.py
     ```
 2.  **Observe**:
     *   Does the window render smoothly without clipping or stutter?
@@ -67,32 +67,28 @@ This protocol is designed for the **System Owner** to manually review the standa
     *   Is the window centered on launch?
     *   *Evaluate*: Does the application look premium immediately? Do the colors, font styles, and rounded borders feel deliberate and cohesive?
 
-#### Step 2: The Ingestion Flow "Feel"
-1.  On the default **Vault Elevation** tab, hover your mouse over the buttons ("Elevate & Vault", "Pause", "Stop").
+#### Step 2: The Calm Journey "Feel"
+1.  On the default **Your Journey** tab, hover your mouse over **Begin Rescue**, **Pause**, and **Stop**.
     *   *Observe*: Are the hover states responsive? Do the transition colors feel smooth?
-2.  Click the "Browse" button to select a mock source folder.
+2.  Click **Browse** to select a mock source folder.
     *   *Observe*: Does the OS folder picker open instantly?
 3.  Evaluate the drag-and-drop zone. Try dragging a folder directly from Windows Explorer into the UI.
     *   *Evaluate*: Is the interaction natural? Does the path display update immediately?
-4.  Initiate the scan by clicking the green "Elevate & Vault" button.
+4.  Select **Standard Mode** or **Intelligence Mode** in Step 3, then click **Begin Rescue**.
     *   *Observe*: Does the progress bar update smoothly?
-    *   *Evaluate*: Does the system remain fully responsive during processing (can you move the window, click tabs, or view log texts without lag)?
+    *   *Evaluate*: Does the system remain fully responsive during processing?
 
-#### Step 3: Semantic Conversation (Vault Chat)
-1.  Navigate to the **Vault Chat** tab.
-2.  Click the "Boot AI Engine" button.
-    *   *Observe*: Does the console/chat area output system updates immediately?
-3.  Type a sample question into the input entry box (e.g., "What documents are indexed?") and press `<Return>`.
-    *   *Evaluate*: Does the query trigger instantly? Does the text entry clear, and does the cursor stay focused?
-    *   *Evaluate*: Does the response stream smoothly onto the screen without freezing the UI?
+#### Step 3: Semantic Conversation (Expert Studio)
+1.  Navigate to **Expert Studio**.
+2.  Click **Boot AI Engine**.
+    *   *Observe*: Does the chat area output system updates immediately?
+3.  Type a sample question and press `<Return>`.
+    *   *Evaluate*: Does the query trigger instantly? Does the response stream without freezing the UI?
 
-#### Step 4: System Administration (Pro Studio)
-1.  Navigate to the **Pro Studio** tab.
-2.  Interact with the "Truthfulness" slider.
-    *   *Observe*: Does the slider move fluidly?
-3.  Click "Sync AI Index".
-    *   *Observe*: Does the sync command execute in the background without locking the layout?
-4.  *Evaluate*: Is the "Danger Zone" at the bottom appropriately styled to convey caution? Do the tooltips appear instantly when hovering over buttons?
+#### Step 4: System Administration (The Vault Index)
+1.  Navigate to **The Vault Index**.
+2.  Review ledger stats and click **Rationalize** if needed.
+3.  *Evaluate*: Is the recovery section appropriately styled to convey caution?
 
 ---
 

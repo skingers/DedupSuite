@@ -25,7 +25,7 @@ jobs:
 
       - name: Build executable with PyInstaller
         run: |
-          python -m PyInstaller --noconsole --onefile --name="DedupSuite" --icon="app.ico" --version-file="version_info.txt" --add-data="app.ico;." --collect-all customtkinter dedup_suite.py
+          python -m PyInstaller sovraan.spec
 
       # Optional: Add a step here for code signing if you have a certificate
       # - name: Sign the executable
@@ -42,7 +42,7 @@ jobs:
           generate_release_notes: true
           # Optional: If you have a CHANGELOG.md, you can use body_path: CHANGELOG.md
           files: |
-            dist/DedupSuite.exe
+            dist/sovraan.exe
         env:
           # The GITHUB_TOKEN is automatically provided by GitHub Actions
           # and is required to create a release.

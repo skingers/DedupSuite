@@ -2,7 +2,7 @@
 
 ## 1. Executive Summary
 
-DedupSuite is a high-scale cryptographic deduplication platform designed to prioritise local integrity, deterministic hashing, and independent trust anchoring. The architecture centralises primary scan and classification workloads on the operator workstation while delegating final anchoring to an isolated cloud endpoint. This split model reduces operational coupling, improves resilience, and enables defensible auditability for long-term data governance.
+sovraan is a high-scale cryptographic deduplication platform designed to prioritise local integrity, deterministic hashing, and independent trust anchoring. The architecture centralises primary scan and classification workloads on the operator workstation while delegating final anchoring to an isolated cloud endpoint. This split model reduces operational coupling, improves resilience, and enables defensible auditability for long-term data governance.
 
 At platform level, the system combines:
 
@@ -16,7 +16,7 @@ At platform level, the system combines:
 The topology is intentionally multi-process and layered:
 
 1. **Presentation and orchestration layer (local GUI)**
-   - `dedup_suite.py` implements the **Calm Journey** CustomTkinter shell: a three-step audit path (**Map the Swamp → Secure the Gold → Ignite Your Mind**), tabbed navigation (**Your Journey**, **Merge Folders**, **Expert Studio**, **The Vault Index**), and a fixed footer for background notes and progress.
+   - `sovraan_core.py` implements the **Calm Journey** CustomTkinter shell: a three-step audit path (**Map the Swamp → Secure the Gold → Ignite Your Mind**), tabbed navigation (**Your Journey**, **Merge Folders**, **Expert Studio**, **The Vault Index**), and a fixed footer for background notes and progress.
    - Step 3 export profile selection uses a native `CTkSegmentedButton` (`Standard Mode` / `Intelligence Mode`) bound to `journey_export_mode`, avoiding custom card widgets that previously conflicted with the grid layout manager.
    - Window policy: `minsize(1100, 700)` for Windows taskbar compatibility under DPI scaling; maximization is deferred (`after(100, state('zoomed')`) until after widget construction.
    - The layer coordinates scan lifecycle, review flows, archive actions, and user prompts without blocking on network or hashing work.
@@ -29,7 +29,7 @@ The topology is intentionally multi-process and layered:
 5. **Remote trust anchor layer (isolated GCP Micro VM)**
    - cloud-facing anchoring endpoint: `http://34.13.47.2:5000/api/v1/anchor`.
 
-This arrangement links a local dedup engine to an isolated Google Cloud Platform Micro VM backend, keeping interactive operations performant while segregating external network trust operations.
+This arrangement links the local sovraan ingest engine to an isolated Google Cloud Platform Micro VM backend, keeping interactive operations performant while segregating external network trust operations.
 
 ### 2.1 Ingest engine (production mode)
 
@@ -78,7 +78,7 @@ Recommended operations practice:
 
 ## 5. Data & Risk Management
 
-DedupSuite uses cryptographic anchor hashing matrices to ensure local database integrity and state preservation:
+sovraan uses cryptographic anchor hashing matrices to ensure local database integrity and state preservation:
 
 - SHA-256 hashes are the canonical identity for exact-match equivalence;
 - proof blobs and statuses are persisted in `blockchain_proofs` for replayable verification state;

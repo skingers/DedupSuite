@@ -8,7 +8,7 @@ from typing import List
 
 import pytest
 
-from dedup_suite import FileAuditor
+from sovraan_core import FileAuditor
 
 
 def _write(path: Path, data: bytes) -> Path:
@@ -24,7 +24,7 @@ def auditor(tmp_path: Path) -> FileAuditor:
 
 
 def test_hash_matches_reference_sha256(auditor: FileAuditor, tmp_path: Path) -> None:
-    data = b"DedupSuite cryptographic payload \x00\x01\x02"
+    data = b"sovraan cryptographic payload \x00\x01\x02"
     target = _write(tmp_path / "a.bin", data)
 
     expected = hashlib.sha256(data).hexdigest()

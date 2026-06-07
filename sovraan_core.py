@@ -54,7 +54,7 @@ def verify_environment() -> None:
     except NameError:
         script_dir = os.getcwd()
 
-    log_path = os.path.join(script_dir, "dedup_suite.log")
+    log_path = os.path.join(script_dir, "sovraan.log")
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     log_entry = (
@@ -99,7 +99,7 @@ def verify_environment() -> None:
                     f"has been modified without updating the KNOWN_GOOD_HASH constant.\n"
                     f"Expected (KNOWN_GOOD_HASH): {KNOWN_GOOD_HASH}\n"
                     f"Actual (Computed): {computed_hash}\n"
-                    f"If this is a conscious deployment, please update KNOWN_GOOD_HASH = '{computed_hash}' in dedup_suite.py."
+                    f"If this is a conscious deployment, please update KNOWN_GOOD_HASH = '{computed_hash}' in sovraan_core.py."
                 )
                 raise RuntimeError(msg)
         elif KNOWN_GOOD_HASH == "PLACEHOLDER":
@@ -1921,7 +1921,7 @@ COLOR_CAUTION = "#4A4D50"
 COLOR_CAUTION_HOVER = "#393C3E"
 COLOR_DANGER = "#4A2222"
 COLOR_DANGER_HOVER = "#3A1A1A"
-# Brand cyan sampled from the DedupSuite 2.0 logo (#66FCF1). Because the fill is
+# Brand cyan sampled from the sovraan 2.0 logo (#66FCF1). Because the fill is
 # bright, on-cyan text/icons use a near-black foreground for accessible contrast.
 COLOR_INFO = "#1d6a73"
 COLOR_INFO_HOVER = "#154d54"
@@ -2019,7 +2019,7 @@ class Tooltip:
             self._after_id = None
 
 
-class DedupApp:
+class SovraanApp:
     def __init__(self):
         class LoggerWrapper:
             def __init__(self, log_func):
@@ -2031,7 +2031,7 @@ class DedupApp:
 
         self.root = ctk.CTk()
         self.root.configure(fg_color="#181818")
-        self.root.title("DedupSuite — Deduplication & Cryptographic Notary")
+        self.root.title("sovraan — Deduplication & Cryptographic Notary")
         self.root.minsize(1100, 700)
         self.root.after(100, lambda: self.root.state('zoomed'))
         self._center_window(1100, 720)
@@ -2069,9 +2069,10 @@ class DedupApp:
         )
         self.nb.grid(row=0, column=0, sticky="nsew", padx=8, pady=(8, 0))
 
-        self.t_vault = self.nb.add("Vault Elevation")
-        self.t_pro = self.nb.add("Pro Studio")
-        self.t_chat = self.nb.add("Vault Chat")
+        self.t_journey = self.nb.add("Your Journey")
+        self.t_merge = self.nb.add("Merge Folders")
+        self.t_expert = self.nb.add("Expert Studio")
+        self.t_vault_index = self.nb.add("The Vault Index")
 
         f_log = ctk.CTkFrame(self.root, fg_color="transparent")
         f_log.grid(row=1, column=0, sticky="ew", padx=20, pady=(10, 5))
@@ -2102,9 +2103,10 @@ class DedupApp:
         self.review_var = tk.BooleanVar(value=bool(config.get("review_duplicates", True)))
         self.notarise_var = tk.BooleanVar(value=bool(config.get("notarise", True)))
 
-        self._init_vault_elevation_tab()
-        self._init_pro_studio_tab()
-        self._init_vault_chat_tab()
+        self._init_your_journey_tab()
+        self._init_merge_folders_tab()
+        self._init_expert_studio_tab()
+        self._init_vault_index_tab()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         # Thread-safe log buffer drained onto the widget every 100ms on the
@@ -2116,7 +2118,7 @@ class DedupApp:
         raw = (config.get("vault_path") or config.get("last_dest") or "").strip()
         if raw:
             return raw
-        return str((Path.home() / "Desktop" / "DedupSuite_Vault").resolve())
+        return str((Path.home() / "Desktop" / "sovraan_vault").resolve())
 
     @staticmethod
     def _split_csv_setting(key: str) -> List[str]:
@@ -2277,7 +2279,7 @@ class DedupApp:
         """Build the branded header bar inside the given parent (Vault Elevation tab).
 
         Prefers a pre-rendered wordmark lockup at ``assets/wordmark.png`` (drop
-        the official ``DEDUP SUITE 2.0`` lockup there and it is used verbatim).
+        the official ``sovraan 2.0`` lockup there and it is used verbatim).
         If absent, a faithful lockup is composed from the brand icon plus the
         wordmark text and a cyan version badge. CustomTkinter needs images
         wrapped in :class:`CTkImage`, so references are retained on ``self`` to
@@ -2332,7 +2334,7 @@ class DedupApp:
                 except Exception:
                     pass
             ctk.CTkLabel(
-                title_row, text="DEDUP SUITE", font=("Segoe UI", 22, "bold"), text_color="#FFFFFF",
+                title_row, text="sovraan", font=("Segoe UI", 22, "bold"), text_color="#FFFFFF",
             ).pack(side="left")
             ctk.CTkLabel(
                 title_row, text="2.0", font=("Segoe UI", 13, "bold"), text_color=COLOR_INFO,
@@ -2390,7 +2392,7 @@ class DedupApp:
         location. Writing is skipped if the dialog is cancelled, and any I/O
         error is surfaced via a message box.
         """
-        default_name = f"{time.strftime('%Y-%m-%d_%H%M%S')}_DedupSuite_Log.txt"
+        default_name = f"{time.strftime('%Y-%m-%d_%H%M%S')}_sovraan_Log.txt"
         # Default to a "logs" folder next to the app/executable for predictable,
         # path-relative archival (created lazily only if the user saves there).
         initial_dir = os.path.join(self._runtime_base(), "logs")
@@ -2480,7 +2482,7 @@ class DedupApp:
             "Identifies and elevates Verified Golden Masters vs. legacy copies "
             "across your vault index, cryptographically linking legacy files to "
             "their source.\n\n"
-            "This runs in the background — you remain free to use DedupSuite "
+            "This runs in the background — you remain free to use sovraan "
             "while it works.",
         )
 
@@ -2489,7 +2491,7 @@ class DedupApp:
 
     def _progress_ui(self, cur, tot, msg):
         if tot > 0: self.pbar.set(cur/tot)
-        self.root.title(f"Dedup Suite - {msg}")
+        self.root.title(f"sovraan - {msg}")
 
     def _section(
         self,
@@ -2655,6 +2657,35 @@ class DedupApp:
         body.pack(fill="x", padx=8, pady=(0, JOURNEY_PADY))
         return body
 
+    def _calm_step_pack(
+        self,
+        parent: Any,
+        step_num: int,
+        title: str,
+        subtitle: str,
+    ) -> ctk.CTkFrame:
+        """Pack-based step card for scrollable Calm Journey layouts."""
+        card = ctk.CTkFrame(parent, corner_radius=8, fg_color="#2A2A2A")
+        card.pack(fill="x", padx=4, pady=JOURNEY_PADY)
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.pack(fill="x", padx=8, pady=(2, 0))
+        ctk.CTkLabel(
+            head,
+            text=f"Step {step_num}",
+            font=FONT_CALM_SMALL,
+            text_color=COLOR_INFO,
+        ).pack(side="left")
+        ctk.CTkLabel(
+            head, text=title, font=FONT_CALM_STEP, anchor="w",
+        ).pack(side="left", padx=(6, 0))
+        ctk.CTkLabel(
+            card, text=subtitle, font=FONT_CALM_SMALL, text_color=COLOR_HINT,
+            anchor="w", justify="left", wraplength=820,
+        ).pack(fill="x", padx=8, pady=(0, JOURNEY_PADY))
+        body = ctk.CTkFrame(card, fg_color="transparent")
+        body.pack(fill="x", padx=8, pady=(0, JOURNEY_PADY))
+        return body
+
     def _collision_policy_label(self) -> str:
         stored = str(config.get("collision_policy", "skip")).lower()
         return COLLISION_CONFIG_TO_LABEL.get(stored, "Skip (Safe)")
@@ -2685,7 +2716,7 @@ class DedupApp:
             self.lbl_vault_destination.configure(text=path)
 
     def _sync_simulate_only_config(self) -> None:
-        """Persist Pro Studio simulate-only toggle for the one-click elevation pipeline."""
+        """Persist simulate-only toggle for the one-click rescue pipeline."""
         val = self.simulate_only_var.get()
         config.set("simulate_only", val)
 
@@ -2705,7 +2736,7 @@ class DedupApp:
         vault_path = self.vault_entry.get()
         if not vault_path or not os.path.exists(vault_path):
             self.chat_display.configure(state="normal")
-            self.chat_display.insert("end", "[ERROR] Please set a valid Vault Destination in the Vault Elevation tab.\n")
+            self.chat_display.insert("end", "[ERROR] Please set a valid Vault Destination on Your Journey.\n")
             self.chat_display.configure(state="disabled")
             return
 
@@ -2986,7 +3017,7 @@ class DedupApp:
             if not self._validate_elevation_paths(source_path, vault_path):
                 return
 
-            self.log("—— Vault Elevation pipeline started ——")
+            self.log("—— Calm Journey rescue pipeline started ——")
             self.log(f"Source: {source_path}")
             self.log(f"Vault: {vault_path}")
             self.log(
@@ -3024,7 +3055,7 @@ class DedupApp:
                 except Exception as exc:
                     self.log(f"Notarisation background task failed to start: {exc}")
             else:
-                self.log("Notarisation skipped (disabled in Pro Studio).")
+                self.log("Notarisation skipped (disabled in Expert Studio).")
 
             self._ensure_file_index_status_column()
             source_label = _obsidian_source_folder_label(source_path)
@@ -3054,7 +3085,7 @@ class DedupApp:
 
             if simulate_only:
                 self.log(
-                    "Simulate Only is enabled in Pro Studio — file transfer skipped. "
+                    "Simulate Only is enabled in The Vault Index — file transfer skipped. "
                     "Manifest catalogued; originals remain untouched.",
                 )
                 self._set_elevation_status("Elevation Complete (Simulate Only)")
@@ -3266,12 +3297,22 @@ class DedupApp:
         finally:
             self.root.after(0, self.reset_scan_buttons)
 
-    def _init_vault_elevation_tab(self) -> None:
-        """Primary path: branding, source/vault pickers, and Elevate & Vault."""
-        self._rescue_matrix_cells: list[Any] = []
-        self._init_header(self.t_vault)
+    def _journey_export_mode_value(self) -> str:
+        """Map Calm Journey UI label to ``db_ingest`` export profile."""
+        if self.journey_export_mode.get() == "Intelligence Mode":
+            return "obsidian"
+        return "standard"
 
-        master_frame = ctk.CTkFrame(self.t_vault, fg_color="transparent")
+    def _on_journey_export_mode(self, value: str) -> None:
+        self.journey_export_mode.set(value)
+        config.set("journey_export_mode", value)
+
+    def _init_your_journey_tab(self) -> None:
+        """Calm Journey: Map the Swamp → Secure the Gold → Ignite Your Mind."""
+        self._rescue_matrix_cells: list[Any] = []
+        self._init_header(self.t_journey)
+
+        master_frame = ctk.CTkFrame(self.t_journey, fg_color="transparent")
         master_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
         action_frame = ctk.CTkFrame(master_frame, fg_color="transparent")
@@ -3282,7 +3323,7 @@ class DedupApp:
 
         self.btn_start = ctk.CTkButton(
             button_container,
-            text="Elevate & Vault",
+            text="Begin Rescue",
             image=self.icons["play"],
             compound="left",
             fg_color=COLOR_INFO,
@@ -3314,12 +3355,18 @@ class DedupApp:
         content_frame = ctk.CTkScrollableFrame(master_frame, fg_color="transparent")
         content_frame.pack(side="top", fill="both", expand=True)
 
+        step1 = self._calm_step_pack(
+            content_frame,
+            1,
+            CALM_STEP1_TITLE,
+            "Select the folder to audit and your Obsidian vault destination.",
+        )
         ctk.CTkLabel(
-            content_frame, text="Select Source", font=FONT_CALM_STEP, anchor="w",
+            step1, text="Select Source", font=FONT_CALM_STEP, anchor="w",
         ).pack(fill="x", pady=(2, 2))
         ctk.CTkLabel(
-            content_frame,
-            text="Point DedupSuite at the folder to ingest. Golden Files are discovered locally — no cloud uploads.",
+            step1,
+            text="Point sovraan at the folder to ingest. Golden Files are discovered locally — no cloud uploads.",
             font=ctk.CTkFont(size=13),
             text_color="gray75",
             anchor="w",
@@ -3329,7 +3376,7 @@ class DedupApp:
 
         self.src_var = tk.StringVar(value=config.get("last_source", ""))
         self.drop_zone = ctk.CTkFrame(
-            content_frame, height=54, corner_radius=14,
+            step1, height=54, corner_radius=14,
             border_width=2, border_color=COLOR_NEUTRAL,
             fg_color="#2A2A2A",
         )
@@ -3348,7 +3395,7 @@ class DedupApp:
         ).pack(pady=(0, 2))
         self._bind_drop_target(self.drop_zone)
 
-        path_row = ctk.CTkFrame(content_frame, fg_color="transparent")
+        path_row = ctk.CTkFrame(step1, fg_color="transparent")
         path_row.pack(fill="x", pady=(0, 8))
         ctk.CTkEntry(
             path_row, textvariable=self.src_var,
@@ -3361,9 +3408,9 @@ class DedupApp:
         ).pack(side="left")
 
         ctk.CTkLabel(
-            content_frame, text="Vault Destination", font=FONT_CALM_STEP, anchor="w",
+            step1, text="Vault Destination", font=FONT_CALM_STEP, anchor="w",
         ).pack(fill="x", pady=(2, 2))
-        vault_card = ctk.CTkFrame(content_frame, corner_radius=10, fg_color="#2A2A2A")
+        vault_card = ctk.CTkFrame(step1, corner_radius=10, fg_color="#2A2A2A")
         vault_card.pack(fill="x", pady=(0, 4))
         vault_inner = ctk.CTkFrame(vault_card, fg_color="transparent")
         vault_inner.pack(fill="x", padx=12, pady=4)
@@ -3383,9 +3430,16 @@ class DedupApp:
         ).pack(side="right", padx=(8, 0))
         self._sync_vault_path_display()
 
-        self.lbl_rescue_progress = ctk.CTkLabel(
+        step2 = self._calm_step_pack(
             content_frame,
-            text="Ready to elevate Golden Files into your vault.",
+            2,
+            CALM_STEP2_TITLE,
+            "Live rescue status and verified Golden Masters discovered during the audit.",
+        )
+
+        self.lbl_rescue_progress = ctk.CTkLabel(
+            step2,
+            text="Ready to rescue Golden Files into your vault.",
             font=ctk.CTkFont(size=13),
             text_color=COLOR_INFO,
             anchor="w",
@@ -3393,89 +3447,197 @@ class DedupApp:
             wraplength=820,
         )
         self.lbl_rescue_progress.pack(fill="x", pady=(2, 2))
-        self.f_rescue_matrix = ctk.CTkFrame(content_frame, fg_color="transparent", height=28)
+        self.f_rescue_matrix = ctk.CTkFrame(step2, fg_color="transparent", height=28)
         self.f_rescue_matrix.pack(fill="x", pady=(0, 4))
         self.f_rescue_matrix.pack_propagate(False)
         self._populate_rescue_matrix([])
 
-    def _init_pro_studio_tab(self) -> None:
-        """Advanced configuration, vault index, merge, AI control, and maintenance."""
-        master_frame = ctk.CTkFrame(self.t_pro, fg_color="transparent")
+        step3 = self._calm_step_pack(
+            content_frame,
+            3,
+            CALM_STEP3_TITLE,
+            "Choose export profile, then start the rescue. Intelligence Mode adds Markdown sidecars for Obsidian.",
+        )
+        ctk.CTkLabel(
+            step3, text="Export profile", font=FONT_CALM_BODY, anchor="w",
+        ).pack(fill="x", pady=(0, 4))
+        self.journey_mode_selector = ctk.CTkSegmentedButton(
+            step3,
+            values=["Standard Mode", "Intelligence Mode"],
+            variable=self.journey_export_mode,
+            command=self._on_journey_export_mode,
+            selected_color=COLOR_INFO,
+            selected_hover_color=COLOR_INFO_HOVER,
+            unselected_color="#2A2A2A",
+        )
+        self.journey_mode_selector.pack(anchor="w", pady=(0, 6))
+
+    def _init_merge_folders_tab(self) -> None:
+        """Consolidate incoming folders into a master tree."""
+        scroll = ctk.CTkScrollableFrame(self.t_merge, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=10, pady=10)
+        self._init_merge_section(scroll)
+
+    def _init_expert_studio_tab(self) -> None:
+        """Advanced scanner settings and semantic vault chat (Intelligence Mode companion)."""
+        master_frame = ctk.CTkFrame(self.t_expert, fg_color="transparent")
         master_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # 3. Input Footer (Bottom) packed FIRST
-        input_frame = ctk.CTkFrame(master_frame, fg_color="transparent")
-        input_frame.pack(side="bottom", fill="x", pady=(10, 0))
+        config_scroll = ctk.CTkScrollableFrame(master_frame, fg_color="transparent", height=220)
+        config_scroll.pack(side="top", fill="x", pady=(0, 8))
 
-        ent_ask = ctk.CTkEntry(input_frame, placeholder_text="Ask your vault...")
-        ent_ask.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        scan_sec = self._section(
+            config_scroll,
+            "Scanner settings",
+            hint="Tune hashing depth, duplicate review, and notarisation for Expert workflows.",
+        )
+        depth_row = ctk.CTkFrame(scan_sec, fg_color="transparent")
+        depth_row.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(depth_row, text="Hashing depth:", font=FONT_BODY).pack(side="left", padx=(0, 8))
+        self.hashing_depth_var = tk.StringVar(value=self._hashing_depth_label())
+        ctk.CTkSegmentedButton(
+            depth_row,
+            values=list(HASHING_DEPTH_LABELS),
+            variable=self.hashing_depth_var,
+            command=self._apply_hashing_depth,
+            selected_color=COLOR_INFO,
+            selected_hover_color=COLOR_INFO_HOVER,
+        ).pack(side="left")
 
-        btn_send = ctk.CTkButton(input_frame, text="Send", width=100)
-        btn_send.pack(side="right")
-
-        # 4. Config Header (Top) packed NEXT
-        config_frame = ctk.CTkFrame(master_frame, fg_color="transparent")
-        config_frame.pack(side="top", fill="x", pady=(0, 10))
+        toggles = ctk.CTkFrame(scan_sec, fg_color="transparent")
+        toggles.pack(fill="x", pady=(0, 4))
+        ctk.CTkCheckBox(
+            toggles,
+            text="Review duplicates before vaulting",
+            variable=self.review_var,
+            font=FONT_BODY,
+            command=lambda: config.set("review_duplicates", self.review_var.get()),
+        ).pack(anchor="w", pady=2)
+        ctk.CTkCheckBox(
+            toggles,
+            text="Notarise hashes (OpenTimestamps background worker)",
+            variable=self.notarise_var,
+            font=FONT_BODY,
+            command=lambda: config.set("notarise", self.notarise_var.get()),
+        ).pack(anchor="w", pady=2)
 
         self._advanced_visible = False
         self.btn_adv_toggle = ctk.CTkButton(
-            config_frame,
-            text="▶ Advanced Settings",
+            config_scroll,
+            text="▶ Advanced AI settings",
             fg_color=COLOR_NEUTRAL,
             hover_color=COLOR_NEUTRAL_HOVER,
             command=self.toggle_advanced_settings,
-            width=180
+            width=200,
         )
-        self.btn_adv_toggle.pack(side="top", anchor="w", padx=5, pady=5)
+        self.btn_adv_toggle.pack(anchor="w", padx=5, pady=5)
 
-        self.advanced_settings_frame = ctk.CTkFrame(config_frame, fg_color="transparent")
-
+        self.advanced_settings_frame = ctk.CTkFrame(config_scroll, fg_color="transparent")
         self.ai_model_var = tk.StringVar(value="CPU-Native Embedded")
-        opt_model = ctk.CTkOptionMenu(
+        ctk.CTkOptionMenu(
             self.advanced_settings_frame,
             values=["CPU-Native Embedded", "Local LLM"],
             variable=self.ai_model_var,
-            width=180
-        )
-        opt_model.pack(side="left", padx=5)
-
-        lbl_truth = ctk.CTkLabel(self.advanced_settings_frame, text="Truthfulness:")
-        lbl_truth.pack(side="left", padx=5)
-
+            width=180,
+        ).pack(side="left", padx=5)
+        ctk.CTkLabel(self.advanced_settings_frame, text="Truthfulness:").pack(side="left", padx=5)
         self.ai_truthfulness_var = tk.DoubleVar(value=0.5)
-        slider_truth = ctk.CTkSlider(
+        ctk.CTkSlider(
             self.advanced_settings_frame,
             from_=0,
             to=1,
             variable=self.ai_truthfulness_var,
-            width=150
-        )
-        slider_truth.pack(side="left", padx=5)
-
-        btn_sync = ctk.CTkButton(
+            width=150,
+        ).pack(side="left", padx=5)
+        ctk.CTkButton(
             self.advanced_settings_frame,
             text="Sync AI Index",
             command=self._on_sync_ai_index,
             width=120,
             fg_color=COLOR_INFO,
             hover_color=COLOR_INFO_HOVER,
-            text_color=COLOR_ON_INFO
-        )
-        btn_sync.pack(side="left", padx=5)
+            text_color=COLOR_ON_INFO,
+        ).pack(side="left", padx=5)
 
-        # 5. Chat Body (Middle)
-        self.chat_display = ctk.CTkTextbox(master_frame)
-        self.chat_display.pack(side="top", fill="both", expand=True)
+        chat_label = ctk.CTkLabel(
+            master_frame,
+            text="Vault Chat — ask questions about your indexed vault",
+            font=FONT_HEADER,
+            anchor="w",
+        )
+        chat_label.pack(fill="x", pady=(4, 4))
+
+        control_frame = ctk.CTkFrame(master_frame, fg_color="transparent")
+        control_frame.pack(side="top", fill="x", pady=(0, 6))
+        ctk.CTkButton(
+            control_frame,
+            text="Boot AI Engine",
+            image=self.icons.get("play"),
+            compound="left",
+            fg_color=COLOR_SAFE,
+            hover_color=COLOR_SAFE_HOVER,
+            command=self._boot_ai_engine,
+            height=36,
+        ).pack(side="left", padx=(0, 10))
+        ctk.CTkButton(
+            control_frame,
+            text="Kill AI Engine",
+            image=self.icons.get("stop"),
+            compound="left",
+            fg_color=COLOR_DANGER,
+            hover_color=COLOR_DANGER_HOVER,
+            command=self._kill_ai_engine,
+            height=36,
+        ).pack(side="left")
+
+        self.chat_display = ctk.CTkTextbox(
+            master_frame,
+            font=ctk.CTkFont(family="Segoe UI", size=13),
+            fg_color="#0D0D11",
+            text_color="#FFFFFF",
+            border_color=COLOR_NEUTRAL,
+            border_width=1,
+        )
+        self.chat_display.pack(side="top", fill="both", expand=True, pady=(0, 8))
         self.chat_display.configure(state="disabled")
+
+        input_frame = ctk.CTkFrame(master_frame, fg_color="transparent")
+        input_frame.pack(side="bottom", fill="x")
+        self.chat_input = ctk.CTkEntry(
+            input_frame,
+            placeholder_text="Ask your vault a question...",
+            font=FONT_BODY,
+            height=40,
+        )
+        self.chat_input.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.chat_input.bind("<Return>", lambda _e: self._send_message())
+        ctk.CTkButton(
+            input_frame,
+            text="Send",
+            image=self.icons.get("arrow"),
+            compound="left",
+            fg_color=COLOR_INFO,
+            hover_color=COLOR_INFO_HOVER,
+            text_color=COLOR_ON_INFO,
+            command=self._send_message,
+            width=100,
+            height=40,
+        ).pack(side="right")
+
+    def _init_vault_index_tab(self) -> None:
+        """Ledger summary, vault commit controls, and maintenance."""
+        scroll = ctk.CTkScrollableFrame(self.t_vault_index, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=10, pady=10)
+        self._init_datamine_section(scroll)
 
     def toggle_advanced_settings(self) -> None:
         if self._advanced_visible:
             self.advanced_settings_frame.pack_forget()
-            self.btn_adv_toggle.configure(text="▶ Advanced Settings")
+            self.btn_adv_toggle.configure(text="▶ Advanced AI settings")
             self._advanced_visible = False
         else:
             self.advanced_settings_frame.pack(side="top", fill="x", pady=5)
-            self.btn_adv_toggle.configure(text="▼ Advanced Settings")
+            self.btn_adv_toggle.configure(text="▼ Advanced AI settings")
             self._advanced_visible = True
 
     def _init_merge_section(self, parent: Any) -> None:
@@ -3628,81 +3790,6 @@ class DedupApp:
 
         self.update_datamine_stats()
 
-    def _init_vault_chat_tab(self) -> None:
-        """Sovereign RAG Tab: interact with vault documents via local LLM."""
-        master_frame = ctk.CTkFrame(self.t_chat, fg_color="transparent")
-        master_frame.pack(fill="both", expand=True, padx=10, pady=10)
-
-        # 1. Top Control Frame: Boot and Kill AI Engine
-        control_frame = ctk.CTkFrame(master_frame, fg_color="transparent")
-        control_frame.pack(side="top", fill="x", pady=(0, 10))
-
-        btn_boot = ctk.CTkButton(
-            control_frame,
-            text="Boot AI Engine",
-            image=self.icons.get("play"),
-            compound="left",
-            fg_color=COLOR_SAFE,
-            hover_color=COLOR_SAFE_HOVER,
-            command=self._boot_ai_engine,
-            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-            height=36,
-        )
-        btn_boot.pack(side="left", padx=(0, 10))
-
-        btn_kill = ctk.CTkButton(
-            control_frame,
-            text="Kill AI Engine",
-            image=self.icons.get("stop"),
-            compound="left",
-            fg_color=COLOR_DANGER,
-            hover_color=COLOR_DANGER_HOVER,
-            command=self._kill_ai_engine,
-            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-            height=36,
-        )
-        btn_kill.pack(side="left")
-
-        # 2. Large Disabled CTkTextbox for Chat Display
-        self.chat_display = ctk.CTkTextbox(
-            master_frame,
-            font=ctk.CTkFont(family="Segoe UI", size=13),
-            fg_color="#0D0D11",
-            text_color="#FFFFFF",
-            border_color=COLOR_NEUTRAL,
-            border_width=1,
-        )
-        self.chat_display.pack(side="top", fill="both", expand=True, pady=(0, 10))
-        self.chat_display.configure(state="disabled")
-
-        # 3. Bottom Frame: Entry Input and Send Button
-        input_frame = ctk.CTkFrame(master_frame, fg_color="transparent")
-        input_frame.pack(side="bottom", fill="x")
-
-        self.chat_input = ctk.CTkEntry(
-            input_frame,
-            placeholder_text="Ask your vault a question...",
-            font=FONT_BODY,
-            height=40,
-        )
-        self.chat_input.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        self.chat_input.bind("<Return>", lambda e: self._send_message())
-
-        btn_send = ctk.CTkButton(
-            input_frame,
-            text="Send",
-            image=self.icons.get("arrow"),
-            compound="left",
-            fg_color=COLOR_INFO,
-            hover_color=COLOR_INFO_HOVER,
-            text_color=COLOR_ON_INFO,
-            command=self._send_message,
-            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-            width=100,
-            height=40,
-        )
-        btn_send.pack(side="right")
-
     def _boot_ai_engine(self) -> None:
         self._append_chat_text("\n[SYSTEM: Booting AI Engine...]\n")
         try:
@@ -3746,12 +3833,22 @@ class DedupApp:
         def run_query():
             try:
                 for chunk in generate_rag_response(query, self.vector_engine):
-                    self.root.after(0, self._append_chat_text, chunk)
-                self.root.after(0, self._append_chat_text, "\n")
+                    self._schedule_on_main(self._append_chat_text, chunk)
+                self._schedule_on_main(self._append_chat_text, "\n")
             except Exception as e:
-                self.root.after(0, self._append_chat_text, f"\n[RAG Error: {str(e)}]\n")
+                self._schedule_on_main(
+                    self._append_chat_text, f"\n[RAG Error: {str(e)}]\n"
+                )
 
         threading.Thread(target=run_query, daemon=True).start()
+
+    def _schedule_on_main(self, callback: Any, *args: Any) -> None:
+        """Marshal a callback onto the Tk main loop when the window still exists."""
+        try:
+            if self.root.winfo_exists():
+                self.root.after(0, callback, *args)
+        except tk.TclError:
+            pass
 
     def rationalize_mine(self) -> None:
         """Recompute golden/legacy classification without blocking the UI.
@@ -4093,13 +4190,14 @@ class DedupApp:
             messagebox.showerror("Error", f"Failed to clear history: {e}")
 
     def start_audit(self) -> None:
-        """One-click Elevate & Vault: config-driven PLAN → EXECUTE with no blocking dialogs."""
+        """One-click Begin Rescue: config-driven PLAN → EXECUTE with no blocking dialogs."""
         src = self.src_var.get().strip()
         if src:
             config.set("last_source", src)
         vault = self.target_vault_dir.get().strip()
         if vault:
             config.set("vault_path", vault)
+        config.set("journey_export_mode", self.journey_export_mode.get())
         self.stop_event.clear()
         self.pause_event.set()
         self.btn_start.configure(state="disabled")
@@ -4206,7 +4304,7 @@ class DedupApp:
         try:
             desktop = Path(os.environ.get("USERPROFILE", str(Path.home()))) / "Desktop"
             desktop.mkdir(parents=True, exist_ok=True)
-            lnk_path = str((desktop / "Dedup Suite.lnk").resolve())
+            lnk_path = str((desktop / "sovraan.lnk").resolve())
 
             if getattr(sys, "frozen", False):
                 target = str(Path(sys.executable).resolve())
@@ -4513,8 +4611,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     """
     verify_environment()
     parser = argparse.ArgumentParser(
-        prog="dedup_suite",
-        description="DedupSuite deduplication engine (GUI by default, headless when given a target).",
+        prog="sovraan_core",
+        description="sovraan deduplication engine (GUI by default, headless when given a target).",
     )
     parser.add_argument(
         "target",
@@ -4583,7 +4681,7 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     headless = args.target is not None or args.source is not None or args.headless
     if not headless:
-        app = DedupApp()
+        app = SovraanApp()
         app.root.mainloop()
         return
 

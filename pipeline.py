@@ -1,4 +1,4 @@
-"""Concurrent ingest pipeline for DedupSuite 2.0.
+"""Concurrent ingest pipeline for sovraan 2.0.
 
 A producer thread pool hashes files and enqueues batched results; a consumer
 thread writes to SQLite on a dedicated connection (WAL-safe). When ``db_path`` is

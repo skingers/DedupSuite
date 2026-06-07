@@ -1,6 +1,6 @@
-# Release Notes: DedupSuite v2.0 (Production)
+# Release Notes: sovraan v2.0 (Production)
 
-DedupSuite 2.0 is locked for production deployment: a Calm Journey operator interface, unrestricted cryptographic ingest, and hardened window behaviour on Windows.
+sovraan 2.0 is locked for production deployment: a Calm Journey operator interface, unrestricted cryptographic ingest, and hardened window behaviour on Windows.
 
 ---
 
@@ -40,7 +40,7 @@ DedupSuite 2.0 is locked for production deployment: a Calm Journey operator inte
 
 ## Operator checklist
 
-1. Launch `python dedup_suite.py` (or the PyInstaller build from `dedup_suite.spec`).
+1. Launch `python sovraan_core.py` (or the PyInstaller build from `sovraan.spec`).
 2. Select source folder on **Your Journey** → Step 1.
 3. Choose export mode on Step 3 → run **Begin Rescue**.
 4. Verify ingest progress in **Background notes**; confirm vault state under **The Vault Index**.

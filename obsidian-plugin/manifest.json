@@ -1,10 +1,10 @@
 {
-  "id": "dedupsuite-integration",
-  "name": "DedupSuite 2.0",
+  "id": "sovraan-obsidian-satellite",
+  "name": "sovraan core link",
   "version": "2.0.0",
   "minAppVersion": "0.15.0",
-  "description": "Bridges DedupSuite 2.0 file hashes, Ed25519 batch signatures, and OpenTimestamps proofs into your vault.",
+  "description": "Bridges sovraan 2.0 file hashes, Ed25519 batch signatures, and OpenTimestamps proofs into your vault.",
   "author": "Mark Skingley",
   "isDesktopOnly": true,
-  "icon": "assets/dedupsuite icon PLUS words ALL sizes BLACK_2.svg"
+  "icon": "../sovraan_icon_only.svg"
 }

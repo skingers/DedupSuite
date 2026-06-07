@@ -1,12 +1,12 @@
 # Technical Architecture Blueprint
 
-This document details the system topology, layered architecture, data state specifications, and integrity checking mechanisms governing DedupSuite 2.0.0.
+This document details the system topology, layered architecture, data state specifications, and integrity checking mechanisms governing sovraan 2.0.0.
 
 ---
 
 ## 1. System Topology & Layers
 
-DedupSuite is structured as a local-first, multi-layered system designed to minimize operational coupling and protect boundary lines between local and remote environments.
+sovraan is structured as a local-first, multi-layered system designed to minimize operational coupling and protect boundary lines between local and remote environments.
 
 ```
 +-------------------------------------------------------------+
@@ -23,7 +23,7 @@ DedupSuite is structured as a local-first, multi-layered system designed to mini
 ```
 
 ### 1.1 Presentation & Orchestration Layer (Local GUI)
-*   **Implementation**: Implemented in [dedup_suite.py](file:///c:/Users/marks/dev/projects/DedupSuite/dedup_suite.py) utilizing a tabbed layout (**Your Journey**, **Merge Folders**, **Expert Studio**, **The Vault Index**).
+*   **Implementation**: Implemented in [sovraan_core.py](file:///c:/Users/marks/dev/projects/sovraan/sovraan_core.py) utilizing a tabbed layout (**Your Journey**, **Merge Folders**, **Expert Studio**, **The Vault Index**).
 *   **Orchestration**: Directs the **Calm Journey** workflow:
     1.  **Map the Swamp**: Scan raw files and record metadata.
     2.  **Secure the Gold**: Resolve duplicates and execute golden-state promotion.
@@ -39,7 +39,7 @@ DedupSuite is structured as a local-first, multi-layered system designed to mini
 *   *WAL Mode* is enabled to allow concurrent reads and single-writer isolation without database locks.
 
 ### 1.4 Memory Core & Indexing Layer (Vector DB)
-*   **Vector Engine**: Described in [vector_engine.py](file:///c:/Users/marks/dev/projects/DedupSuite/core/vector_engine.py). Coordinates the loading of the graph manifest and sidecar file body strings.
+*   **Vector Engine**: Described in [vector_engine.py](file:///c:/Users/marks/dev/projects/sovraan/core/vector_engine.py). Coordinates the loading of the graph manifest and sidecar file body strings.
 *   **Embedding Pipeline**: Runs entirely locally using SentenceTransformers loaded with the `all-MiniLM-L6-v2` model. Emitted vectors (384 dimensions) are stored in ChromaDB (.chroma_index) using persistent disk mapping.
 
 ### 1.5 Remote Notary Interface (Transit Boundary)

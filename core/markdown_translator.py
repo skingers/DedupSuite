@@ -1,7 +1,7 @@
 """Translate deduplicated unique files into a linked Obsidian knowledge graph.
 
 The :class:`MarkdownTranslator` takes the unique ("golden") files surfaced by
-:class:`~dedup_suite.FileAuditor` and renders one Markdown note per file inside
+:class:`~sovraan_core.FileAuditor` and renders one Markdown note per file inside
 a flattened ``Obsidian_Export`` directory. Notes carry YAML frontmatter and are
 cross-linked to a per-source-folder index note using Obsidian ``[[wikilinks]]``
 so the resulting vault is navigable bi-directionally.

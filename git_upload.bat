@@ -1,13 +1,13 @@
 @echo off
 echo ========================================================
-echo      DEDUP SUITE - AUTO GITLAB UPLOADER
+echo      sovraan - AUTO GITLAB UPLOADER
 echo ========================================================
 echo.
 
 :: 1. Fix the destination address (just in case it was wrong before)
 echo [1/4] Configuring GitLab address...
 git remote remove origin >nul 2>&1
-git remote add origin https://gitlab.com/skingers/DedupSuite.git
+git remote add origin https://gitlab.com/skingers/sovraan.git
 
 :: 2. Stage all changes (new files, modified files, deletions)
 echo [2/4] Gathering all file changes...

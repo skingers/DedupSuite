@@ -1,4 +1,4 @@
-"""OpenTimestamps proof generation for the DedupSuite forensic ledger."""
+"""OpenTimestamps proof generation for the sovraan forensic ledger."""
 
 from __future__ import annotations
 

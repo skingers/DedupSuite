@@ -2,15 +2,15 @@
 
 ## Document scope
 
-This architecture record defines DedupSuite 2.0 production behaviour: metadata-blackout naming, the **relational forensic ledger**, internal OpenTimestamps BLOB storage, and dual-profile vault export. It complements `README.md`, `TECHNICAL_ARCHITECTURE.md`, and the implementation in `db_ingest.py`, `core/ots_proof.py`, and `run_production.py`.
+This architecture record defines sovraan 2.0 production behaviour: metadata-blackout naming, the **relational forensic ledger**, internal OpenTimestamps BLOB storage, and dual-profile vault export. It complements `README.md`, `TECHNICAL_ARCHITECTURE.md`, and the implementation in `db_ingest.py`, `core/ots_proof.py`, and `run_production.py`.
 
-**Operational context (v2.0 locked):** The Calm Journey GUI (`dedup_suite.py`) drives local audits without trial or discovery file caps. Ingest is unlimited via `run_pipeline(trial_golden_limit=None)` and full-tree `os.walk` discovery. Vault export semantics in this document apply to all golden rows produced by that unrestricted ingest path.
+**Operational context (v2.0 locked):** The Calm Journey GUI (`sovraan_core.py`) drives local audits without trial or discovery file caps. Ingest is unlimited via `run_pipeline(trial_golden_limit=None)` and full-tree `os.walk` discovery. Vault export semantics in this document apply to all golden rows produced by that unrestricted ingest path.
 
 ---
 
 ## 1. System context
 
-DedupSuite maintains a **self-contained forensic registry** and an optional vault projection:
+sovraan maintains a **self-contained forensic registry** and an optional vault projection:
 
 1. **Ledger row** — `file_index` (path, SHA-256, session, golden flag, **`ots_proof` BLOB**).
 2. **Ingest integrity** — Ed25519 `batch_signatures` (canonical manifests per batch commit).

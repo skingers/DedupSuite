@@ -1,4 +1,4 @@
-"""Ingestion kernel for the DedupSuite pipeline.
+"""Ingestion kernel for the sovraan pipeline.
 
 `parse_metadata_and_hash` is the per-file worker invoked by the crawler. For a
 readable file it returns::

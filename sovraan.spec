@@ -1,19 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller build specification for DedupSuite 2.0.
+"""PyInstaller build specification for sovraan 2.0.
 
-Produces a single-file Windows executable (``DedupSuite.exe``) that:
+Produces a single-file Windows executable (``sovraan.exe``) that:
 
 * launches the CustomTkinter GUI when started with no arguments, and
 * runs **headlessly** when a target directory / ``--headless`` flag is supplied
-  (driven by :func:`dedup_suite.main`), for invocation by the Obsidian plugin.
+  (driven by :func:`sovraan_core.main`), for invocation by the Obsidian plugin.
 
 Bundled, read-only assets (branding masters, ``app.ico``) are unpacked at
-runtime to ``sys._MEIPASS`` and resolved via ``DedupApp._asset_base``. Writable
+runtime to ``sys._MEIPASS`` and resolved via ``SovraanApp._asset_base``. Writable
 runtime state (``data_mine.db`` and exported ``logs/``) is created next to the
-executable via ``DedupApp._runtime_base`` / ``DatabaseManager``.
+executable via ``SovraanApp._runtime_base`` / ``DatabaseManager``.
 
-Build:  pyinstaller dedup_suite.spec
-Output: dist/DedupSuite.exe
+Build:  pyinstaller sovraan.spec
+Output: dist/sovraan.exe
 """
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
@@ -24,7 +24,7 @@ datas = collect_data_files("customtkinter")
 
 # Project assets and the application icon. The first tuple element is the
 # on-disk source; the second is the destination *inside* the bundle, matching
-# the layout that DedupApp._asset_base() expects (``assets/...`` and ``app.ico``).
+# the layout that SovraanApp._asset_base() expects (``assets/...`` and ``app.ico``).
 datas += [
     ("assets", "assets"),
     ("app.ico", "."),
@@ -35,7 +35,7 @@ datas += [
 hiddenimports = collect_submodules("opentimestamps")
 
 a = Analysis(
-    ["dedup_suite.py"],
+    ["sovraan_core.py"],
     pathex=[],
     binaries=[],
     datas=datas,
@@ -56,7 +56,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="DedupSuite",
+    name="sovraan",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

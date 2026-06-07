@@ -1,4 +1,4 @@
-"""Cryptographic gate for the DedupSuite integrity layer.
+"""Cryptographic gate for the sovraan integrity layer.
 
 Uses the OS credential vault (via :mod:`keyring`) to persist an Ed25519
 keypair and :mod:`nacl.signing` to sign and verify compact metadata manifests
@@ -23,8 +23,8 @@ import keyring
 from nacl.exceptions import BadSignatureError
 from nacl.signing import SigningKey, VerifyKey
 
-# OS vault namespace — isolated from other DedupSuite installs on the machine.
-KEYRING_SERVICE = "DedupSuite"
+# OS vault namespace — isolated from other sovraan installs on the machine.
+KEYRING_SERVICE = "sovraan"
 KEYRING_SIGNING_SEED = "ed25519-signing-seed"
 KEYRING_VERIFY_KEY = "ed25519-verify-key"
 

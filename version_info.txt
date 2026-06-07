@@ -29,13 +29,13 @@ VSVersionInfo(
       [
       StringTable(
         u'040904B0',
-        [StringStruct(u'CompanyName', u'DedupSuite'),
-        StringStruct(u'FileDescription', u'File Deduplicator Suite'),
+        [StringStruct(u'CompanyName', u'sovraan'),
+        StringStruct(u'FileDescription', u'sovraan — sovereign local-first vault platform'),
         StringStruct(u'FileVersion', u'1.1.1'),
-        StringStruct(u'InternalName', u'DedupSuite'),
+        StringStruct(u'InternalName', u'sovraan'),
         StringStruct(u'LegalCopyright', u'Copyright (c) 2026'),
-        StringStruct(u'OriginalFilename', u'DedupSuite.exe'),
-        StringStruct(u'ProductName', u'DedupSuite'),
+        StringStruct(u'OriginalFilename', u'sovraan.exe'),
+        StringStruct(u'ProductName', u'sovraan'),
         StringStruct(u'ProductVersion', u'1.1.1')])
       ]), 
     VarFileInfo([VarStruct(u'Translation', [1033, 1200])])

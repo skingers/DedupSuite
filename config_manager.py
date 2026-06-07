@@ -1,4 +1,4 @@
-"""Centralized persistent application configuration for DedupSuite."""
+"""Centralized persistent application configuration for sovraan."""
 
 from __future__ import annotations
 

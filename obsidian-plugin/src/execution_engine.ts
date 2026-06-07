@@ -15,31 +15,31 @@ export interface ExecutionResult {
 
 function translateExecutionError(error: unknown): string {
   if (error instanceof PathValidationError) {
-    return `DedupSuite configuration is invalid: ${error.message}`;
+    return `sovraan configuration is invalid: ${error.message}`;
   }
   const err = error instanceof Error ? error : new Error(String(error));
   const code = (err as NodeJS.ErrnoException).code;
   const combined = `${code ?? ""} ${err.message}`.toLowerCase();
   if (code === "ENOENT" || combined.includes("enoent")) {
     if (combined.includes("python") || combined.includes("spawn")) {
-      return "DedupSuite could not find the Python interpreter. Check the Python path in settings.";
+      return "sovraan could not find the Python interpreter. Check the Python path in settings.";
     }
     if (combined.includes(".py") || combined.includes("script")) {
-      return "DedupSuite could not find the backend script. Check the backend script path in settings.";
+      return "sovraan could not find the backend script. Check the backend script path in settings.";
     }
-    return "DedupSuite could not find a required file or folder. Verify your paths in settings.";
+    return "sovraan could not find a required file or folder. Verify your paths in settings.";
   }
   if (code === "EACCES" || combined.includes("eacces") || combined.includes("permission denied")) {
-    return "DedupSuite could not access a configured path. Check folder permissions.";
+    return "sovraan could not access a configured path. Check folder permissions.";
   }
   const backendExit = /^backend failed \(code (\d+)\)/i.exec(err.message);
   if (backendExit) {
-    return `DedupSuite backend exited with an error (code ${backendExit[1]}). Enable debug logging for details.`;
+    return `sovraan backend exited with an error (code ${backendExit[1]}). Enable debug logging for details.`;
   }
   if (combined.includes("failed to launch")) {
-    return "DedupSuite could not start the Python backend. Check your Python and script paths in settings.";
+    return "sovraan could not start the Python backend. Check your Python and script paths in settings.";
   }
-  return "DedupSuite encountered an unexpected error. Enable debug logging for technical details.";
+  return "sovraan encountered an unexpected error. Enable debug logging for technical details.";
 }
 
 function showUserError(error: unknown, duration = ERROR_NOTICE_MS): void {
@@ -83,7 +83,7 @@ export class ExecutionEngine {
   }
 
   /**
-   * Runs dedup_suite.py headless against the vault with explicit production paths.
+   * Runs sovraan_core.py headless against the vault with explicit production paths.
    */
   async runBackend(vaultPath: string): Promise<ExecutionResult> {
     let scriptPath: string;
@@ -143,7 +143,7 @@ export class ExecutionEngine {
         if (settled) return;
         settled = true;
         if (code === 0) {
-          new Notice("DedupSuite: backend completed successfully.", 5000);
+          new Notice("sovraan: backend completed successfully.", 5000);
           resolve({ success: true, exitCode: 0, stdout, stderr });
         } else {
           settleFailure(new Error(`Backend failed (code ${code}): ${stderr.trim()}`));

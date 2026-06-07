@@ -1,10 +1,10 @@
 @echo off
 echo ========================================================
-echo      DEDUP SUITE - EXE BUILDER
+echo      sovraan - EXE BUILDER
 echo ========================================================
 echo.
 
-set APP_VERSION=v1.1.1
+set APP_VERSION=v2.0.0
 
 echo [1/3] Installing/Verifying PyInstaller...
 python -m pip install pyinstaller --upgrade
@@ -16,11 +16,11 @@ echo [2/3] Building Executable (This may take a minute)...
 :: --clean: Clears PyInstaller cache to prevent errors
 :: --add-data "app.ico;.": Bundles the icon file so the app can find it
 :: --icon="app.ico": Sets the icon for the .exe file itself
-python -m PyInstaller --noconsole --onefile --clean --collect-all customtkinter --add-data "app.ico;." --icon="app.ico" --name "DedupSuite_%APP_VERSION%" dedup_suite.py
+python -m PyInstaller --noconsole --onefile --clean --collect-all customtkinter --add-data "app.ico;." --icon="app.ico" --name "sovraan_%APP_VERSION%" sovraan_core.py
 
 echo.
 echo ========================================================
-if exist "dist\DedupSuite_%APP_VERSION%.exe" (
+if exist "dist\sovraan_%APP_VERSION%.exe" (
     echo    SUCCESS! Your new application is in the 'dist' folder.
 ) else (
     echo    ERROR: Build failed. Check the output above.

@@ -1,6 +1,6 @@
-"""Export knowledge graph from elevated sidecars in the DedupSuite Vault.
+"""Export knowledge graph from elevated sidecars in the sovraan Vault.
 
-Scans the DEDUPSUITE_VAULT directory recursively to parse .md sidecars, extracts
+Scans the SOVRAAN_VAULT directory recursively to parse .md sidecars, extracts
 metadata, original source path, creation date, and notary status to generate
 a flattened graph structure of nodes and semantic relationship edges.
 """
@@ -438,12 +438,12 @@ class KnowledgeGraphExporter:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Scans the DEDUPSUITE_VAULT to extract metadata and export relationship graph."
+        description="Scans the SOVRAAN_VAULT to extract metadata and export relationship graph."
     )
     parser.add_argument(
         "--vault",
-        default=os.environ.get("DEDUPSUITE_VAULT"),
-        help="Path to the DEDUPSUITE_VAULT to scan. Defaults to DEDUPSUITE_VAULT env var.",
+        default=os.environ.get("SOVRAAN_VAULT"),
+        help="Path to the SOVRAAN_VAULT to scan. Defaults to SOVRAAN_VAULT env var.",
     )
     parser.add_argument(
         "--db",
@@ -465,7 +465,7 @@ def main() -> None:
             pass
 
     if not vault_path:
-        print("Error: No vault path specified. Provide --vault or set DEDUPSUITE_VAULT.")
+        print("Error: No vault path specified. Provide --vault or set SOVRAAN_VAULT.")
         exit(1)
 
     print(f"Traversing vault: {vault_path}")

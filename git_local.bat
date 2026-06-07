@@ -1,6 +1,6 @@
 @echo off
 echo ========================================================
-echo      DEDUP SUITE - LOCAL GIT COMMIT
+echo      sovraan - LOCAL GIT COMMIT
 echo ========================================================
 echo.
 

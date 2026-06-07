@@ -1,1 +1,1 @@
-"""Network integration package for DedupSuite (cloud notary gateway client)."""
+"""Network integration package for sovraan (cloud notary gateway client)."""

@@ -1,4 +1,4 @@
-"""Absolute-path production configuration for DedupSuite 2.0."""
+"""Absolute-path production configuration for sovraan 2.0."""
 
 from __future__ import annotations
 

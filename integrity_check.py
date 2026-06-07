@@ -1,4 +1,4 @@
-"""Integrity verification for signed ingest batches in DedupSuite."""
+"""Integrity verification for signed ingest batches in sovraan."""
 
 from __future__ import annotations
 

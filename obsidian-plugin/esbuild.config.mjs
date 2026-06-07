@@ -5,7 +5,7 @@ const prod = process.argv.includes("production");
 
 const context = await esbuild.context({
   banner: {
-    js: "/* DedupSuite 2.0 Obsidian bridge — built for production */",
+    js: "/* sovraan 2.0 Obsidian bridge — built for production */",
   },
   entryPoints: ["src/main.ts"],
   bundle: true,

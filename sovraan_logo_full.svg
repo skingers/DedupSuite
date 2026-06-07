@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 300" width="100%" height="100%">
+  <g transform="translate(20, 20) scale(0.65)">
+      <rect x="0" y="0" width="400" height="400" rx="80" fill="#181818" />
+      <path d="M 160 80 L 300 280 L 90 310 Z" fill="none" stroke="#EAEAEA" stroke-width="24" stroke-linejoin="round" />
+      <line x1="160" y1="80" x2="210" y2="295" stroke="#9E9E9E" stroke-width="14" stroke-dasharray="16, 16" stroke-linecap="round" />
+      <line x1="190" y1="200" x2="350" y2="200" stroke="#1d6a73" stroke-width="36" stroke-linecap="round" />
+  </g>
+  <text x="310" y="195" font-family="Segoe UI, Inter, sans-serif" font-size="140" font-weight="700" fill="#EAEAEA" letter-spacing="-0.04em">sovraan</text>
+</svg>

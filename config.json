@@ -1,0 +1,17 @@
+{
+    "copy_method": "copy2",
+    "collision_policy": "skip",
+    "vault_path": "",
+    "last_source": "C:/Users/marks/Documents/Legal Docs Commercial",
+    "last_dest": "",
+    "scan_mode": "Exact Match (Fast)",
+    "threshold": 0,
+    "threads": 4,
+    "ignore_exts": "",
+    "ignore_folders": "",
+    "theme": "light",
+    "merge_master": "",
+    "merge_incoming": "",
+    "journey_export_mode": "Standard Mode",
+    "simulate_only": false
+}

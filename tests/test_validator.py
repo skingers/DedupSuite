@@ -1,4 +1,4 @@
-"""Fidelity Validator and Integrity Gate for DedupSuite.
+"""Fidelity Validator and Integrity Gate for sovraan.
 
 Runs 10 Golden Queries against the vector engine, resolves matching nodes,
 compares original source files on disk against vault companion assets with 100%

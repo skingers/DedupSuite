@@ -1,12 +1,12 @@
-/* DedupSuite 2.0 — ribbon-only styles (scoped under .workspace-ribbon) */
+/* sovraan 2.0 — ribbon-only styles (scoped under .workspace-ribbon) */
 
-.workspace-ribbon .clickable-icon[aria-label="DedupSuite 2.0"] {
+.workspace-ribbon .clickable-icon[aria-label="sovraan 2.0"] {
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-.workspace-ribbon .clickable-icon[aria-label="DedupSuite 2.0"] svg {
+.workspace-ribbon .clickable-icon[aria-label="sovraan 2.0"] svg {
   width: 20px;
   height: 20px;
   display: block;
@@ -17,6 +17,6 @@
   transition: opacity 0.15s ease;
 }
 
-.workspace-ribbon .clickable-icon[aria-label="DedupSuite 2.0"]:hover svg {
+.workspace-ribbon .clickable-icon[aria-label="sovraan 2.0"]:hover svg {
   opacity: 0.85;
 }

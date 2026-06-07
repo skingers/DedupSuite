@@ -18,7 +18,7 @@ from typing import List, Optional
 
 import db_ingest
 from db_ingest import TrialLimitExceededError
-from dedup_suite import DatabaseManager
+from sovraan_core import DatabaseManager
 from integrity_check import IntegrityCheck
 from pipeline import PRODUCER_WORKERS, run_pipeline
 from production_config import (
@@ -55,7 +55,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="run_production",
         description=(
-            "DedupSuite 2.0 production ingest: 8-way concurrent hashing, "
+            "sovraan 2.0 production ingest: 8-way concurrent hashing, "
             "cryptographic batch signing, and Obsidian vault export."
         ),
     )
