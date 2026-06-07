@@ -98,6 +98,16 @@ npm run build
 
 Copy `dist/` into your vault at `.obsidian/plugins/sovraan-obsidian-satellite/`.
 
+### Pro license (freemium cap)
+
+Unlicensed audits enforce a **2000 processed-file cap** with HMAC-signed local state (`sovraan_processed_state.json`). Pass a valid Sovraan Pro JWT via:
+
+```bash
+python sovraan_core.py --headless --source C:\path\to\files --db C:\path\to\data_mine.db --license "<JWT>"
+```
+
+The Obsidian plugin forwards `--license` from its `proLicenseKey` setting using the same contract.
+
 ### Community plugin (separate repo)
 
 The community plugin does not bundle the commercial Python engine. Users configure local paths to their installed sovraan build. Keep CLI arguments aligned with `obsidian-plugin/src/execution_engine.ts` when changing headless mode.

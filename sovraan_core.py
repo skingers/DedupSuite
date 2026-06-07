@@ -38,6 +38,12 @@ from vector_engine import SovereignVectorEngine
 from chat_engine import generate_rag_response
 from pipeline import run_pipeline
 from config_manager import AppConfig
+from core.license_gate import (
+    FreemiumLimitExceeded,
+    assert_processing_allowed,
+    record_processed_file,
+    resolve_state_path,
+)
 
 config = AppConfig()
 
@@ -861,6 +867,7 @@ class FileAuditor:
         pause_event: Optional[threading.Event] = None,
         db_manager: Optional[DatabaseManager] = None,
         session_id: Optional[str] = None,
+        license_key: Optional[str] = None,
     ) -> None:
         self.root_path = Path(root_path).resolve()
         self.move_to = Path(move_to).resolve() if move_to else None
@@ -878,6 +885,10 @@ class FileAuditor:
         self.review_mode = review_mode
         self.db_manager = db_manager
         self.session_id = session_id
+        self.license_key = (license_key or config.get("proLicenseKey") or "").strip()
+        self._state_path = resolve_state_path(
+            Path(db_manager.db_path) if db_manager and db_manager.db_path else None
+        )
         self.device_id = get_drive_id(self.root_path)
         # AUDIT-REVIEW: Register the device up front so the enforced
         # file_index.device_id -> devices FK resolves during indexing.
@@ -931,6 +942,11 @@ class FileAuditor:
         return None
 
     def run(self) -> None:
+        try:
+            assert_processing_allowed(self.license_key, state_path=self._state_path)
+        except FreemiumLimitExceeded as exc:
+            self.log(str(exc))
+            raise
         self.log(f"--- Starting Exact Audit on: {self.root_path} ---")
         size_map = defaultdict(list)
         self.update_progress(0, 0, "Scanning file sizes...")
@@ -946,6 +962,13 @@ class FileAuditor:
                 if filename.lower().endswith(self.ignore_exts): continue
                 filepath = Path(dirpath) / filename
                 try:
+                    try:
+                        record_processed_file(
+                            self.license_key, state_path=self._state_path
+                        )
+                    except FreemiumLimitExceeded as exc:
+                        self.log(str(exc))
+                        raise
                     size = filepath.stat().st_size
                     size_map[size].append(filepath)
                     self.files_scanned += 1
@@ -3042,6 +3065,7 @@ class SovraanApp:
                 ignore_folders=ignore_folders,
                 db_manager=self.db_manager,
                 session_id=self.current_session_id,
+                license_key=config.get("proLicenseKey"),
             )
             auditor.run()
             self.db_manager.identify_golden_versions(session_id=self.current_session_id)
@@ -3291,6 +3315,9 @@ class SovraanApp:
             except OSError as exc:
                 self.log(f"Could not open vault folder: {exc}")
             self.root.after(0, self.update_datamine_stats)
+        except FreemiumLimitExceeded as exc:
+            self.log(str(exc))
+            self._set_elevation_status("Rescue stopped — Pro license required.")
         except Exception as exc:
             self.log(f"Elevation pipeline error: {exc}")
             self._set_elevation_status("Elevation failed — see Background notes.")
@@ -4540,6 +4567,9 @@ def run_headless(args: argparse.Namespace) -> int:
         db_manager = DatabaseManager(db_path=Path(args.db).expanduser().resolve())
     else:
         db_manager = DatabaseManager()
+    if getattr(args, "license", None):
+        config.set("proLicenseKey", args.license.strip())
+    license_key = (getattr(args, "license", None) or config.get("proLicenseKey") or "").strip()
     try:
         session_id = str(uuid.uuid4())
         log(f"Headless audit starting on: {target} (session {session_id})")
@@ -4558,6 +4588,7 @@ def run_headless(args: argparse.Namespace) -> int:
             ignore_folders=ignore_folders,
             db_manager=db_manager,
             session_id=session_id,
+            license_key=license_key,
         )
         auditor.run()
 
@@ -4591,8 +4622,11 @@ def run_headless(args: argparse.Namespace) -> int:
 
         log("Headless run finished successfully.")
         return 0
+    except FreemiumLimitExceeded as exc:
+        print(str(exc), file=sys.stderr, flush=True)
+        return 1
     except Exception as exc:
-        print(f"[DEDUP] FATAL: headless run failed: {exc}", file=sys.stderr, flush=True)
+        print(f"[sovraan] FATAL: headless run failed: {exc}", file=sys.stderr, flush=True)
         return 1
     finally:
         db_manager.close()
@@ -4672,6 +4706,12 @@ def main(argv: Optional[List[str]] = None) -> None:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Export the Obsidian knowledge graph after the audit (default: enabled).",
+    )
+    parser.add_argument(
+        "--license",
+        default=None,
+        metavar="JWT",
+        help="Sovraan Pro license JWT (unlocks processing beyond the 2000-file freemium cap).",
     )
     args = parser.parse_args(argv)
 

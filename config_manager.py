@@ -32,6 +32,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "merge_incoming": "",
     "journey_export_mode": "Standard Mode",
     "simulate_only": False,
+    "proLicenseKey": "",
 }
 
 
