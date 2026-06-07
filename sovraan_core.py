@@ -4539,6 +4539,56 @@ def export_knowledge_graph_core(
         log(f"Knowledge graph export failed: {e}")
 
 
+def run_verify_ots(args: argparse.Namespace) -> int:
+    """Verify a ledger-stored OpenTimestamps proof for a single file hash (SOV-SEC-015)."""
+    import json
+    import sqlite3
+
+    from core.ots_proof import verify_opentimestamps_proof
+
+    file_hash = (getattr(args, "hash", None) or "").strip().lower()
+    if not file_hash:
+        print("[sovraan] ERROR: --hash is required with --verify-ots", file=sys.stderr, flush=True)
+        return 2
+
+    db_path = getattr(args, "db", None)
+    if not db_path:
+        print("[sovraan] ERROR: --db is required with --verify-ots", file=sys.stderr, flush=True)
+        return 2
+
+    resolved_db = Path(db_path).expanduser().resolve()
+    if not resolved_db.is_file():
+        print(f"[sovraan] ERROR: database not found: {resolved_db}", file=sys.stderr, flush=True)
+        return 2
+
+    conn = sqlite3.connect(str(resolved_db))
+    try:
+        row = conn.execute(
+            "SELECT ots_proof_blob FROM blockchain_proofs WHERE file_hash = ?",
+            (file_hash,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if row is None or row[0] is None:
+        result = {
+            "ok": False,
+            "state": "invalid",
+            "block_height": None,
+            "message": "no proof blob in ledger for hash",
+        }
+        print(json.dumps(result), flush=True)
+        return 1
+
+    proof_blob = row[0]
+    if isinstance(proof_blob, memoryview):
+        proof_blob = proof_blob.tobytes()
+
+    result = verify_opentimestamps_proof(file_hash, proof_blob)
+    print(json.dumps(result), flush=True)
+    return 0 if result.get("ok") else 1
+
+
 def run_headless(args: argparse.Namespace) -> int:
     """Run a full audit (and optional notarisation/export) without a GUI.
 
@@ -4713,7 +4763,21 @@ def main(argv: Optional[List[str]] = None) -> None:
         metavar="JWT",
         help="Sovraan Pro license JWT (unlocks processing beyond the 2000-file freemium cap).",
     )
+    parser.add_argument(
+        "--verify-ots",
+        action="store_true",
+        help="Verify the OpenTimestamps proof for --hash in --db; emit JSON on stdout and exit.",
+    )
+    parser.add_argument(
+        "--hash",
+        default=None,
+        metavar="HEX",
+        help="Lowercase SHA-256 hex digest for --verify-ots mode.",
+    )
     args = parser.parse_args(argv)
+
+    if args.verify_ots:
+        sys.exit(run_verify_ots(args))
 
     for label, value in (("source", args.source), ("destination", args.destination), ("db", args.db)):
         if value is not None and not Path(value).expanduser().is_absolute():
